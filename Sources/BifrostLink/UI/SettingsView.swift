@@ -1,0 +1,210 @@
+import SwiftUI
+
+struct SettingsView: View {
+    @ObservedObject var settings: LinkSettings
+
+    var body: some View {
+        TabView {
+            general.tabItem { Label("General", systemImage: "gearshape") }
+            picture.tabItem { Label("Picture", systemImage: "sparkles.tv") }
+            capture.tabItem { Label("Capture", systemImage: "record.circle") }
+            docking.tabItem { Label("Docking", systemImage: "laptopcomputer.and.arrow.down") }
+            input.tabItem { Label("Input", systemImage: "gamecontroller") }
+            emulation.tabItem { Label("Emulation", systemImage: "square.stack.3d.up") }
+        }
+        .frame(width: 560)
+        .padding(.vertical, 8)
+    }
+
+    private func footer(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var general: some View {
+        Form {
+            Section {
+                Toggle("Link automatically when the Thor is plugged in", isOn: $settings.autoConnect)
+            } footer: {
+                footer("Bifrost waits quietly and links as soon as your Thor shows up over USB.")
+            }
+            Section {
+                folderRow("File downloads", path: $settings.downloadFolder)
+            } footer: {
+                footer("Where files from the Thor land when you download them in the Files tab.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var picture: some View {
+        Form {
+            Section("Look") {
+                Toggle("Sharper picture with MetalFX upscaling", isOn: $settings.upscaling)
+                Toggle("Cinema mode", isOn: $settings.cinemaMode)
+                Toggle("Show the stats overlay", isOn: $settings.statsOverlay)
+            }
+            Section {
+                Toggle("Show controls at the top edge in full screen", isOn: $settings.fullscreenControls)
+            } footer: {
+                footer("Move the pointer to the top of the screen and the controls fade in; they slip away again on their own. Turn this off for a completely clean full screen. ⌘F always leaves full screen.")
+            }
+            Section {
+                Picker("Codec", selection: $settings.codec) {
+                    ForEach(VideoCodecKind.allCases) { Text($0.label).tag($0) }
+                }
+                Picker("Quality", selection: $settings.bitrateMbps) {
+                    ForEach([4, 8, 12, 16, 24, 32, 48], id: \.self) { Text("\($0) Mbit/s").tag($0) }
+                }
+                Picker("Frame rate", selection: $settings.maxFps) {
+                    ForEach([30, 60, 90, 120], id: \.self) { Text("\($0) fps").tag($0) }
+                }
+                Picker("Resolution", selection: $settings.maxSize) {
+                    Text("Native").tag(0)
+                    Text("1600 px").tag(1600)
+                    Text("1280 px").tag(1280)
+                    Text("1024 px").tag(1024)
+                }
+            } header: {
+                Text("Stream")
+            } footer: {
+                footer("Stream changes apply the next time Bifrost links. Device ▸ Relink applies them right away.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var capture: some View {
+        Form {
+            Section("Save to") {
+                folderRow("Screenshots", path: $settings.screenshotFolder)
+                folderRow("Recordings & replays", path: $settings.recordingFolder)
+            }
+            Section {
+                Picker("Recording", selection: $settings.recordLayout) {
+                    Text("Each screen as its own file").tag(false)
+                    Text("The window layout as one video").tag(true)
+                }
+            } footer: {
+                footer("Separate files keep the Thor’s original picture untouched. The window layout records both screens exactly as you see them. While Cocoon is running a game, captures are named after it and filed in its own folder.")
+            }
+            Section {
+                Toggle("Instant replay", isOn: $settings.replayEnabled)
+                Picker("Keep the last", selection: $settings.replaySeconds) {
+                    Text("30 seconds").tag(30)
+                    Text("1 minute").tag(60)
+                    Text("2 minutes").tag(120)
+                }
+                .disabled(!settings.replayEnabled)
+            } footer: {
+                footer("Bifrost keeps the last moments in memory, so you can save that great play after it happened (⌥⌘S). Takes effect the next time the Thor links.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var docking: some View {
+        Form {
+            Section {
+                Toggle("Keep the Thor awake when the lid closes or power is pressed", isOn: $settings.keepAwake)
+                Toggle("Turn the Thor’s screens off while the lid is closed", isOn: $settings.panelsOffWhenClosed)
+                    .disabled(!settings.keepAwake)
+                Toggle("Turn the Thor’s screens off as soon as it links", isOn: $settings.panelsOffOnLink)
+                Toggle("Put the Thor to sleep when unlinking with the lid closed", isOn: $settings.sleepOnUnlinkIfClosed)
+            } footer: {
+                footer("Docked like with HDMI: the Thor’s own screens go dark while the mirror keeps running. Its power button switches them back on or off.")
+            }
+            Section {
+                Toggle("Charging separation while linked", isOn: $settings.chargingSeparation)
+            } footer: {
+                footer("The Thor runs straight from USB power instead of charging its battery, which keeps it cooler. Your own setting comes back when you unlink or unplug.")
+            }
+            Section {
+                Toggle("Pause Sleep Manager while linked", isOn: $settings.pauseSleepManager)
+            } footer: {
+                footer("Sleep Manager’s closed-lid protection would switch Wi‑Fi off and lock the Thor while it’s docked. Bifrost pauses it, keeps your usual Wi‑Fi and Bluetooth state, and hands everything back to Sleep Manager when you unlink, even if you just pull the cable.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var input: some View {
+        Form {
+            Section {
+                Toggle("Use controllers connected to the Mac", isOn: $settings.gamepadEnabled)
+                Picker("Show up on the Thor as", selection: $settings.controllerIdentity) {
+                    ForEach(GamepadBridge.Identity.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .disabled(!settings.gamepadEnabled)
+                Toggle("Pass rumble back to the controller", isOn: $settings.rumbleEnabled)
+                    .disabled(!settings.gamepadEnabled || settings.controllerIdentity != "xbox")
+                Toggle("Show a mouse pointer on the Thor", isOn: $settings.hoverEnabled)
+            } footer: {
+                footer("As an Odin Controller, apps treat your controller exactly like the Thor’s built-in one, so your existing mappings just work. Rumble needs the Xbox identity, because Android only vibrates Xbox controllers here.")
+            }
+            Section("Mouse & trackpad") {
+                LabeledContent("Click and drag", value: "Touch")
+                LabeledContent("Right click", value: "Back")
+                LabeledContent("Middle click", value: "Home")
+                LabeledContent("Pinch", value: "Two-finger zoom")
+                LabeledContent("⌘-drag the small screen", value: "Move or resize it")
+                LabeledContent("Drop files on a screen", value: "ROMs are sorted, APKs installed")
+            }
+            Section("Keyboard") {
+                LabeledContent("Typing", value: "Goes to the screen you clicked")
+                LabeledContent("⌘C / ⌘V", value: "Copy from / paste to the Thor")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var emulation: some View {
+        Form {
+            Section {
+                folderRow("Save backups", path: $settings.saveBackupFolder)
+                Toggle("Back up saves once a day when the Thor links", isOn: $settings.autoSaveBackup)
+                Picker("Keep automatic backups", selection: $settings.saveBackupKeep) {
+                    ForEach([5, 10, 20, 50], id: \.self) { Text("\($0)").tag($0) }
+                }
+            } header: {
+                Text("Save backups")
+            } footer: {
+                footer("Saves and states from your emulators are copied to the Mac. Manual backups are always kept.")
+            }
+            Section {
+                LabeledContent("Disc image shrinking", value: EmulationHub.tools["chdman"].flatMap { $0 } != nil ? "Built in (chdman)" : "Unavailable")
+            } footer: {
+                footer("PlayStation, PlayStation 2, PSP, Dreamcast and Saturn images can be shrunk to CHD right from the Library tab, several at once.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func folderRow(_ title: String, path: Binding<String>) -> some View {
+        LabeledContent(title) {
+            HStack {
+                Text(path.wrappedValue.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    .lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                Button("Choose…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.canCreateDirectories = true
+                    panel.directoryURL = URL(fileURLWithPath: path.wrappedValue)
+                    if panel.runModal() == .OK, let url = panel.url { path.wrappedValue = url.path }
+                }
+                Button {
+                    try? FileManager.default.createDirectory(atPath: path.wrappedValue, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path.wrappedValue))
+                } label: {
+                    Image(systemName: "arrow.up.forward.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Open in Finder")
+                .accessibilityLabel("Open \(title) in Finder")
+                if path.wrappedValue != LinkSettings.defaultFolder(for: title) {
+                    Button("Reset") { path.wrappedValue = LinkSettings.defaultFolder(for: title) }
+                }
+            }
+        }
+    }
+}

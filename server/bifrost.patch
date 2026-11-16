@@ -1,0 +1,448 @@
+diff --git a/server/build_without_gradle.sh b/server/build_without_gradle.sh
+index e5da2e4..6a978c0 100755
+--- a/server/build_without_gradle.sh
++++ b/server/build_without_gradle.sh
+@@ -12,7 +12,7 @@
+ set -e
+ 
+ SCRCPY_DEBUG=false
+-SCRCPY_VERSION_NAME=4.1
++SCRCPY_VERSION_NAME=${SCRCPY_VERSION_NAME:-4.1}
+ 
+ PLATFORM=${ANDROID_PLATFORM:-36}
+ BUILD_TOOLS=${ANDROID_BUILD_TOOLS:-36.0.0}
+diff --git a/server/src/main/java/com/genymobile/scrcpy/CleanUp.java b/server/src/main/java/com/genymobile/scrcpy/CleanUp.java
+index a5816c3..4c70db3 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/CleanUp.java
++++ b/server/src/main/java/com/genymobile/scrcpy/CleanUp.java
+@@ -115,15 +115,29 @@ public final class CleanUp {
+ 
+         boolean powerOffScreen = options.getPowerOffScreenOnClose();
+ 
++        String restoreChargingSeparation = "-";
++        if (options.getChargingSeparation()) {
++            try {
++                String oldValue = Settings.getAndPutValue(Settings.TABLE_SYSTEM, "is_charging_separation", "1");
++                if (!"1".equals(oldValue)) {
++                    restoreChargingSeparation = oldValue == null || oldValue.isEmpty() || "null".equals(oldValue) ? "0" : oldValue;
++                }
++                Ln.i("Charging separation enabled");
++            } catch (SettingsException e) {
++                Ln.e("Could not enable charging separation", e);
++            }
++        }
++
+         try {
+-            run(displayId, restoreStayOn, disableShowTouches, powerOffScreen, restoreScreenOffTimeout, restoreDisplayImePolicy);
++            run(displayId, restoreStayOn, disableShowTouches, powerOffScreen, restoreScreenOffTimeout, restoreDisplayImePolicy, restoreChargingSeparation,
++                    options.getCleanupShell());
+         } catch (IOException e) {
+             Ln.e("Clean up I/O exception", e);
+         }
+     }
+ 
+     private void run(int displayId, int restoreStayOn, boolean disableShowTouches, boolean powerOffScreen, int restoreScreenOffTimeout,
+-            int restoreDisplayImePolicy) throws IOException {
++            int restoreDisplayImePolicy, String restoreChargingSeparation, String cleanupShell) throws IOException {
+         String[] cmd = {
+                 "app_process",
+                 "/",
+@@ -134,6 +148,8 @@ public final class CleanUp {
+                 String.valueOf(powerOffScreen),
+                 String.valueOf(restoreScreenOffTimeout),
+                 String.valueOf(restoreDisplayImePolicy),
++                restoreChargingSeparation,
++                cleanupShell == null || cleanupShell.isEmpty() ? "-" : cleanupShell,
+         };
+ 
+         ProcessBuilder builder = new ProcessBuilder(cmd);
+@@ -185,6 +201,18 @@ public final class CleanUp {
+         Looper.prepareMainLooper();
+     }
+ 
++    private static boolean isLidClosed() {
++        try {
++            Process process = Runtime.getRuntime().exec(new String[] {"sh", "-c", "getevent -pl 2>/dev/null | grep -c 'SW_LID\\*'"});
++            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()));
++            String line = reader.readLine();
++            process.waitFor();
++            return line != null && Integer.parseInt(line.trim()) > 0;
++        } catch (Exception e) {
++            return false;
++        }
++    }
++
+     public static void main(String... args) {
+         try {
+             // Start a new session to avoid being terminated along with the server process on some devices
+@@ -204,6 +232,8 @@ public final class CleanUp {
+         boolean powerOffScreen = Boolean.parseBoolean(args[3]);
+         int restoreScreenOffTimeout = Integer.parseInt(args[4]);
+         int restoreDisplayImePolicy = Integer.parseInt(args[5]);
++        String restoreChargingSeparation = args.length > 6 ? args[6] : "-";
++        String cleanupShell = args.length > 7 ? args[7] : "-";
+ 
+         // Dynamic option
+         boolean restoreDisplayPower = false;
+@@ -249,6 +279,15 @@ public final class CleanUp {
+             }
+         }
+ 
++        if (!"-".equals(restoreChargingSeparation)) {
++            Ln.i("Restoring charging separation");
++            try {
++                Settings.putValue(Settings.TABLE_SYSTEM, "is_charging_separation", restoreChargingSeparation);
++            } catch (SettingsException e) {
++                Ln.e("Could not restore charging separation", e);
++            }
++        }
++
+         if (restoreDisplayImePolicy != -1) {
+             Ln.i("Restoring \"display IME policy\"");
+             ServiceManager.getWindowManager().setDisplayImePolicy(displayId, restoreDisplayImePolicy);
+@@ -256,13 +295,30 @@ public final class CleanUp {
+ 
+         // Change the power of the main display when mirroring a virtual display
+         int targetDisplayId = displayId != Device.DISPLAY_ID_NONE ? displayId : 0;
+-        if (Device.isScreenOn(targetDisplayId)) {
+-            if (powerOffScreen) {
++        if (powerOffScreen) {
++            if (Device.isScreenOn(targetDisplayId)) {
+                 Ln.i("Power off screen");
+                 Device.powerOffScreen(targetDisplayId);
+-            } else if (restoreDisplayPower) {
+-                Ln.i("Restoring display power");
+-                Device.setDisplayPower(targetDisplayId, true);
++            }
++        } else if (restoreDisplayPower) {
++            boolean lidClosed = isLidClosed();
++            boolean screenOn = Device.isScreenOn(targetDisplayId);
++            Ln.i("Restoring display power (lid " + (lidClosed ? "closed" : "open") + ", " + (screenOn ? "awake" : "asleep") + ")");
++            Device.setDisplayPower(targetDisplayId, true);
++            if (screenOn && lidClosed) {
++                android.os.SystemClock.sleep(300);
++                Device.pressReleaseKeycode(android.view.KeyEvent.KEYCODE_SLEEP, targetDisplayId, Device.INJECT_MODE_ASYNC);
++            }
++        }
++
++        if (!"-".equals(cleanupShell)) {
++            Ln.i("Running cleanup commands");
++            try {
++                Process process = Runtime.getRuntime().exec(new String[] {"sh", "-c", cleanupShell});
++                process.getInputStream().close();
++                process.waitFor();
++            } catch (Exception e) {
++                Ln.e("Cleanup commands failed", e);
+             }
+         }
+ 
+diff --git a/server/src/main/java/com/genymobile/scrcpy/Options.java b/server/src/main/java/com/genymobile/scrcpy/Options.java
+index 26a6ba9..ac1e881 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/Options.java
++++ b/server/src/main/java/com/genymobile/scrcpy/Options.java
+@@ -33,6 +33,12 @@ public class Options {
+     private VideoSource videoSource = VideoSource.DISPLAY;
+     private AudioSource audioSource = AudioSource.OUTPUT;
+     private boolean audioDup;
++    private int[] audioUids = new int[0];
++    private boolean audioExcludeUids;
++    private boolean audioKick;
++    private boolean chargingSeparation;
++    private boolean hiddenCapture;
++    private String cleanupShell = "";
+     private int videoBitRate = 8000000;
+     private int audioBitRate = 128000;
+     private float maxFps;
+@@ -131,6 +137,30 @@ public class Options {
+         return audioDup;
+     }
+ 
++    public int[] getAudioUids() {
++        return audioUids;
++    }
++
++    public boolean getAudioExcludeUids() {
++        return audioExcludeUids;
++    }
++
++    public boolean getAudioKick() {
++        return audioKick;
++    }
++
++    public boolean getChargingSeparation() {
++        return chargingSeparation;
++    }
++
++    public boolean getHiddenCapture() {
++        return hiddenCapture;
++    }
++
++    public String getCleanupShell() {
++        return cleanupShell;
++    }
++
+     public int getVideoBitRate() {
+         return videoBitRate;
+     }
+@@ -389,6 +419,32 @@ public class Options {
+                 case "audio_dup":
+                     options.audioDup = Boolean.parseBoolean(value);
+                     break;
++                case "audio_uids":
++                    if (value.isEmpty()) {
++                        options.audioUids = new int[0];
++                    } else {
++                        String[] parts = value.split(",");
++                        options.audioUids = new int[parts.length];
++                        for (int j = 0; j < parts.length; ++j) {
++                            options.audioUids[j] = Integer.parseInt(parts[j].trim());
++                        }
++                    }
++                    break;
++                case "audio_exclude_uids":
++                    options.audioExcludeUids = Boolean.parseBoolean(value);
++                    break;
++                case "audio_kick":
++                    options.audioKick = Boolean.parseBoolean(value);
++                    break;
++                case "charging_separation":
++                    options.chargingSeparation = Boolean.parseBoolean(value);
++                    break;
++                case "hidden_capture":
++                    options.hiddenCapture = Boolean.parseBoolean(value);
++                    break;
++                case "cleanup_shell":
++                    options.cleanupShell = new String(android.util.Base64.decode(value, android.util.Base64.DEFAULT), java.nio.charset.StandardCharsets.UTF_8);
++                    break;
+                 case "max_size":
+                     options.maxSize = Integer.parseInt(value);
+                     break;
+diff --git a/server/src/main/java/com/genymobile/scrcpy/Server.java b/server/src/main/java/com/genymobile/scrcpy/Server.java
+index d7d1a76..f7bc9ac 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/Server.java
++++ b/server/src/main/java/com/genymobile/scrcpy/Server.java
+@@ -123,7 +123,7 @@ public final class Server {
+                 if (audioSource.isDirect()) {
+                     audioCapture = new AudioDirectCapture(audioSource);
+                 } else {
+-                    audioCapture = new AudioPlaybackCapture(options.getAudioDup());
++                    audioCapture = new AudioPlaybackCapture(options.getAudioDup(), options.getAudioUids(), options.getAudioExcludeUids(), options.getAudioKick());
+                 }
+ 
+                 Streamer audioStreamer = new Streamer(connection.getAudioFd(), audioCodec, options.getSendStreamMeta(), options.getSendFrameMeta());
+diff --git a/server/src/main/java/com/genymobile/scrcpy/audio/AudioPlaybackCapture.java b/server/src/main/java/com/genymobile/scrcpy/audio/AudioPlaybackCapture.java
+index 009a239..4b01fc5 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/audio/AudioPlaybackCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/audio/AudioPlaybackCapture.java
+@@ -24,8 +24,43 @@ public final class AudioPlaybackCapture implements AudioCapture {
+     private AudioRecord recorder;
+     private AudioRecordReader reader;
+ 
++    private final int[] uids;
++    private final boolean excludeUids;
++
++    private final boolean kick;
++
+     public AudioPlaybackCapture(boolean keepPlayingOnDevice) {
++        this(keepPlayingOnDevice, new int[0], false, false);
++    }
++
++    public AudioPlaybackCapture(boolean keepPlayingOnDevice, int[] uids, boolean excludeUids, boolean kick) {
+         this.keepPlayingOnDevice = keepPlayingOnDevice;
++        this.uids = uids;
++        this.excludeUids = excludeUids;
++        this.kick = kick;
++    }
++
++    private static void kickRouting() {
++        Thread thread = new Thread(() -> {
++            try {
++                AudioRecord.Builder builder = new AudioRecord.Builder();
++                builder.setContext(FakeContext.get());
++                builder.setAudioSource(android.media.MediaRecorder.AudioSource.REMOTE_SUBMIX);
++                builder.setAudioFormat(AudioConfig.createAudioFormat());
++                AudioRecord kickRecord = builder.build();
++                kickRecord.startRecording();
++                byte[] buffer = new byte[4096];
++                long end = android.os.SystemClock.uptimeMillis() + 250;
++                while (android.os.SystemClock.uptimeMillis() < end) {
++                    kickRecord.read(buffer, 0, buffer.length);
++                }
++                kickRecord.stop();
++                kickRecord.release();
++            } catch (Exception e) {
++                Ln.w("Audio routing kick failed: " + e);
++            }
++        }, "audio-kick");
++        thread.start();
+     }
+ 
+     @SuppressLint("PrivateApi")
+@@ -43,12 +78,21 @@ public final class AudioPlaybackCapture implements AudioCapture {
+             Method setTargetMixRoleMethod = audioMixingRuleBuilderClass.getMethod("setTargetMixRole", int.class);
+             setTargetMixRoleMethod.invoke(audioMixingRuleBuilder, mixRolePlayersConstant);
+ 
+-            AudioAttributes attributes = new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build();
+-
+-            // audioMixingRuleBuilder.addMixRule(AudioMixingRule.RULE_MATCH_ATTRIBUTE_USAGE, attributes);
+             int ruleMatchAttributeUsageConstant = audioMixingRuleClass.getField("RULE_MATCH_ATTRIBUTE_USAGE").getInt(null);
+             Method addMixRuleMethod = audioMixingRuleBuilderClass.getMethod("addMixRule", int.class, Object.class);
+-            addMixRuleMethod.invoke(audioMixingRuleBuilder, ruleMatchAttributeUsageConstant, attributes);
++            int[] usages = {AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_GAME, AudioAttributes.USAGE_UNKNOWN};
++            for (int usage : usages) {
++                AudioAttributes attributes = new AudioAttributes.Builder().setUsage(usage).build();
++                addMixRuleMethod.invoke(audioMixingRuleBuilder, ruleMatchAttributeUsageConstant, attributes);
++            }
++
++            if (uids.length > 0) {
++                int ruleMatchUidConstant = audioMixingRuleClass.getField("RULE_MATCH_UID").getInt(null);
++                Method uidMethod = audioMixingRuleBuilderClass.getMethod(excludeUids ? "excludeMixRule" : "addMixRule", int.class, Object.class);
++                for (int uid : uids) {
++                    uidMethod.invoke(audioMixingRuleBuilder, ruleMatchUidConstant, uid);
++                }
++            }
+ 
+             // AudioMixingRule audioMixingRule = builder.build();
+             Object audioMixingRule = audioMixingRuleBuilderClass.getMethod("build").invoke(audioMixingRuleBuilder);
+@@ -119,6 +163,9 @@ public final class AudioPlaybackCapture implements AudioCapture {
+     public void start() throws AudioCaptureException {
+         recorder = createAudioRecord();
+         recorder.startRecording();
++        if (kick) {
++            kickRouting();
++        }
+         reader = new AudioRecordReader(recorder);
+     }
+ 
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/UhidManager.java b/server/src/main/java/com/genymobile/scrcpy/control/UhidManager.java
+index 20532c0..7458adc 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/UhidManager.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/UhidManager.java
+@@ -29,6 +29,7 @@ public final class UhidManager {
+ 
+     // Linux: include/uapi/linux/input.h
+     private static final short BUS_VIRTUAL = 0x06;
++    private static final short BUS_BLUETOOTH = 0x05;
+ 
+     private static final int SIZE_OF_UHID_EVENT = 4380; // sizeof(struct uhid_event)
+ 
+@@ -202,7 +203,7 @@ public final class UhidManager {
+ 
+         buf.position(4 + 256);
+         buf.putShort((short) reportDesc.length);
+-        buf.putShort(BUS_VIRTUAL);
++        buf.putShort(vendorId == 0x045e && productId == 0x02fd ? BUS_BLUETOOTH : BUS_VIRTUAL);
+         buf.putInt(vendorId);
+         buf.putInt(productId);
+         buf.putInt(0); // version
+diff --git a/server/src/main/java/com/genymobile/scrcpy/device/Device.java b/server/src/main/java/com/genymobile/scrcpy/device/Device.java
+index 615675a..0885803 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/device/Device.java
++++ b/server/src/main/java/com/genymobile/scrcpy/device/Device.java
+@@ -135,9 +135,76 @@ public final class Device {
+         return clipboardManager.setText(text);
+     }
+ 
++    private static IBinder aynPanelService;
++
++    private static IBinder getAynPanelService() {
++        if (aynPanelService != null && aynPanelService.isBinderAlive()) {
++            return aynPanelService;
++        }
++        try {
++            Class<?> serviceManager = Class.forName("android.os.ServiceManager");
++            aynPanelService = (IBinder) serviceManager.getMethod("getService", String.class).invoke(null, "PServerBinder");
++        } catch (Exception e) {
++            aynPanelService = null;
++        }
++        return aynPanelService;
++    }
++
++    private static boolean runAynCommand(IBinder service, String command) {
++        android.os.Parcel data = android.os.Parcel.obtain();
++        android.os.Parcel reply = android.os.Parcel.obtain();
++        try {
++            data.writeStringArray(new String[] {command, "0"});
++            return service.transact(0, data, reply, 0);
++        } catch (Exception e) {
++            Ln.w("AYN panel command failed: " + e);
++            return false;
++        } finally {
++            data.recycle();
++            reply.recycle();
++        }
++    }
++
++    public static boolean setAynPanels(boolean on) {
++        IBinder service = getAynPanelService();
++        if (service == null) {
++            return false;
++        }
++        String value = on ? "0" : "1";
++        boolean ok = runAynCommand(service, "echo " + value + " > sys/class/backlight/panel0-backlight/bl_power");
++        ok &= runAynCommand(service, "echo " + value + " > sys/class/backlight/panel1-backlight/bl_power");
++        return ok;
++    }
++
++    private static java.util.concurrent.ScheduledExecutorService aynKeeper;
++    private static java.util.concurrent.ScheduledFuture<?> aynKeepOff;
++
++    private static synchronized void keepAynPanelsOff(boolean keep) {
++        if (aynKeepOff != null) {
++            aynKeepOff.cancel(false);
++            aynKeepOff = null;
++        }
++        if (!keep) {
++            return;
++        }
++        if (aynKeeper == null) {
++            aynKeeper = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
++                Thread thread = new Thread(r, "ayn-panels");
++                thread.setDaemon(true);
++                return thread;
++            });
++        }
++        aynKeepOff = aynKeeper.scheduleWithFixedDelay(() -> setAynPanels(false), 1500, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
++    }
++
+     public static boolean setDisplayPower(int displayId, boolean on) {
+         assert displayId != Device.DISPLAY_ID_NONE;
+ 
++        if (setAynPanels(on)) {
++            keepAynPanelsOff(!on);
++            return true;
++        }
++
+         if (USE_ANDROID_15_DISPLAY_POWER && Build.VERSION.SDK_INT >= AndroidVersions.API_35_ANDROID_15) {
+             return ServiceManager.getDisplayManager().requestDisplayPower(displayId, on);
+         }
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
+index 0768181..2c319ed 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/ScreenCapture.java
+@@ -32,6 +32,7 @@ public class ScreenCapture extends SurfaceCapture {
+ 
+     private final VirtualDisplayListener vdListener;
+     private final int displayId;
++    private final boolean hiddenCapture;
+     private final Rect crop;
+     private Orientation.Lock captureOrientationLock;
+     private Orientation captureOrientation;
+@@ -51,6 +52,7 @@ public class ScreenCapture extends SurfaceCapture {
+     private OpenGLRunner glRunner;
+ 
+     public ScreenCapture(VirtualDisplayListener vdListener, Options options) {
++        this.hiddenCapture = options.getHiddenCapture();
+         this.vdListener = vdListener;
+         this.displayId = options.getDisplayId();
+         assert displayId != Device.DISPLAY_ID_NONE;
+@@ -130,6 +132,9 @@ public class ScreenCapture extends SurfaceCapture {
+         }
+ 
+         try {
++            if (hiddenCapture) {
++                throw new UnsupportedOperationException("Hidden capture requested");
++            }
+             virtualDisplay = ServiceManager.getDisplayManager()
+                     .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
+             Ln.d("Display: using DisplayManager API");
