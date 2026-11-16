@@ -187,6 +187,8 @@ final class ControlChannel: @unchecked Sendable {
     }
 
     func resetVideo() { send(Data([17])) }
+    func pauseVideo() { send(Data([23])) }
+    func resumeVideo() { send(Data([24])) }
 
     func scanFile(_ path: String) {
         let bytes = Array(path.utf8)

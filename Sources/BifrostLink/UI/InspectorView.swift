@@ -48,9 +48,9 @@ struct InspectorView: View {
             case .saves: SavesView(backups: manager.backups, settings: settings)
             case .cleanup: CleanupView(cleanup: manager.cleanup)
             }
+            ActivityPanel(files: manager.files, hub: manager.emulation)
         }
         .frame(minWidth: 320)
-        .background(.regularMaterial)
     }
 }
 
@@ -114,12 +114,16 @@ struct LibraryView: View {
     @State private var confirmOrphans = false
 
     var body: some View {
+        GeometryReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 importZone
                 if hub.scanning && hub.lastScan == nil {
-                    ProgressView("Looking through your library…").frame(maxWidth: .infinity).padding(.top, 30)
+                    Spacer(minLength: 20)
+                    ProgressView("Looking through your library…").frame(maxWidth: .infinity, alignment: .center)
+                    Spacer(minLength: 20)
                 } else if hub.lastScan == nil {
+                    Spacer(minLength: 10)
                     ContentUnavailableView {
                         Label("Library check", systemImage: "square.stack.3d.up")
                     } description: {
@@ -127,7 +131,9 @@ struct LibraryView: View {
                     } actions: {
                         Button("Check Library") { Task { await hub.scan() } }.buttonStyle(.borderedProminent)
                     }
-                    .padding(.top, 10)
+                    .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 10)
                 } else {
                     updatesSection
                     unsortedSection
@@ -138,12 +144,8 @@ struct LibraryView: View {
                 }
             }
             .padding(12)
+            .frame(minHeight: proxy.size.height, alignment: .top)
         }
-        .overlay(alignment: .bottom) {
-            if let progress = hub.shrinkProgress {
-                ShrinkProgressCard(progress: progress) { hub.cancelShrink() }
-                    .padding(10)
-            }
         }
         .confirmationDialog(hub.shrunk.count == 1 ? "Remove the original?" : "Remove \(hub.shrunk.count) originals?", isPresented: $hub.askRemoveOriginals) {
             Button(hub.shrunk.count == 1 ? "Remove Original" : "Remove All \(hub.shrunk.count)", role: .destructive) { Task { await hub.removeOriginals(hub.shrunk) } }
@@ -392,9 +394,9 @@ struct LibraryView: View {
         if !hub.shrinkCandidates.isEmpty || !hub.shrunk.isEmpty {
             let selected = hub.shrinkCandidates.filter { hub.shrinkSelection.contains($0.id) }
             let savings = (selected.isEmpty ? hub.shrinkCandidates : selected).reduce(0) { $0 + $1.estimatedSavings }
-            SectionHeader(title: "Shrink disc images", symbol: "arrow.down.right.and.arrow.up.left", trailing: "≈ \(savings.bytesText)")
+            SectionHeader(title: "Shrink games", symbol: "arrow.down.right.and.arrow.up.left", trailing: "≈ \(savings.bytesText)")
             Card {
-                Text("Converted to CHD on your Mac, checked, then sent back. Emulators play CHD directly. Multi-track games, playlists and Cocoon entries are handled for you.").font(.caption).foregroundStyle(.secondary)
+                Text("Disc images become CHD, cartridge ROMs become ZIP. Each is converted on your Mac, checked, then sent back, and emulators play both directly. Multi-track games, playlists and Cocoon entries are handled for you.").font(.caption).foregroundStyle(.secondary)
                 if !hub.shrunk.isEmpty {
                     HStack {
                         Label("\(hub.shrunk.count) original\(hub.shrunk.count == 1 ? "" : "s") still on the Thor", systemImage: "doc.on.doc").font(.caption)
@@ -412,7 +414,7 @@ struct LibraryView: View {
                         Button(selected.isEmpty ? "Shrink" : "Shrink \(selected.count)") { hub.shrinkSelected() }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
-                            .disabled(selected.isEmpty || hub.shrinkProgress != nil)
+                            .disabled(selected.isEmpty)
                     }
                     ForEach(hub.shrinkCandidates) { candidate in
                         Toggle(isOn: Binding(get: { hub.shrinkSelection.contains(candidate.id) }, set: { on in
@@ -425,42 +427,12 @@ struct LibraryView: View {
                             }
                         }
                         .toggleStyle(.checkbox)
-                        .disabled(hub.shrinkProgress != nil)
                     }
                     Toggle("Remove originals automatically once the CHD is checked", isOn: Binding(get: { hub.removeOriginalsAfterShrink }, set: { hub.removeOriginalsAfterShrink = $0 }))
                         .toggleStyle(.checkbox).font(.caption)
                 }
             }
         }
-    }
-}
-
-struct ShrinkProgressCard: View {
-    let progress: ShrinkProgress
-    let cancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(progress.total > 1 ? "Shrinking \(progress.index) of \(progress.total)" : "Shrinking").font(.caption.weight(.semibold))
-                Spacer()
-                if progress.saved > 0 { Text("\(progress.saved.bytesText) saved").font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
-                Button("Cancel", action: cancel).controlSize(.mini)
-            }
-            Text(progress.name).font(.caption).lineLimit(1).truncationMode(.middle)
-            if let fraction = progress.fraction {
-                ProgressView(value: fraction) { EmptyView() } currentValueLabel: {
-                    Text("\(progress.step) · \(Int(fraction * 100))%").font(.caption2.monospacedDigit())
-                }
-            } else {
-                ProgressView().progressViewStyle(.linear)
-                Text(progress.step).font(.caption2)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: 320)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
     }
 }
 
@@ -472,6 +444,23 @@ struct ImportSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(hub.importItems.count == 1 ? "Import 1 ROM" : "Import \(hub.importItems.count) ROMs").font(.title3.weight(.semibold))
                 Text("Pick the system for each game. It goes straight into that system’s folder on your Thor.").font(.callout).foregroundStyle(.secondary)
+                if hub.importItems.count > 1 {
+                    Picker("Set all to", selection: Binding(
+                        get: {
+                            let systems = Set(hub.importItems.map(\.system))
+                            guard systems.count == 1, let only = systems.first, hub.installedSystems.contains(only) else { return "mixed" }
+                            return only
+                        },
+                        set: { system in
+                            guard system != "mixed" else { return }
+                            for i in hub.importItems.indices { hub.importItems[i].system = system }
+                        })) {
+                        Text("Each its own").tag("mixed")
+                        ForEach(hub.installedSystems, id: \.self) { Text(Systems.name(for: $0)).tag($0) }
+                    }
+                    .frame(maxWidth: 300)
+                    .padding(.top, 6)
+                }
             }
             .padding(18)
             Divider().opacity(0.5)

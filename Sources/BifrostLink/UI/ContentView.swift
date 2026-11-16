@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showFiles = false
     @State private var showAudio = false
     @State private var isFullScreen = false
+    @AppStorage("sidePanelWidth") private var panelWidth: Double = 380
 
     var body: some View {
         ZStack {
@@ -16,7 +17,7 @@ struct ContentView: View {
             }
             if manager.state == .linked || !manager.screens.isEmpty {
                 StageView(manager: manager, settings: settings, padding: isFullScreen ? 0 : 20, gap: isFullScreen ? 0 : 14, chrome: !isFullScreen)
-                    .ignoresSafeArea(.container, edges: isFullScreen ? .all : [])
+                    .ignoresSafeArea(.container, edges: isFullScreen ? (showFiles ? [.top, .bottom, .leading] : .all) : [])
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else {
                 WelcomeView(manager: manager)
@@ -35,10 +36,15 @@ struct ContentView: View {
                 FullscreenBar(manager: manager, settings: settings, showAudio: $showAudio, showInspector: $showFiles)
             }
         }
-        .inspector(isPresented: $showFiles) {
-            InspectorView(manager: manager, settings: settings)
-                .inspectorColumnWidth(min: 320, ideal: 380, max: 560)
+        .safeAreaInset(edge: .trailing, spacing: 0) {
+            if showFiles {
+                SidePanel(width: $panelWidth) {
+                    InspectorView(manager: manager, settings: settings)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: showFiles)
         .background(WindowObserver(isFullScreen: $isFullScreen,
                                    fitAspect: linked && !showFiles ? StageView.contentSize(manager: manager, settings: settings) : nil))
         .modifier(ImportSheetPresenter(hub: manager.emulation))
@@ -48,7 +54,7 @@ struct ContentView: View {
         .frame(minWidth: 480, minHeight: 320)
         .onReceive(NotificationCenter.default.publisher(for: .bifrostToggleFiles)) { _ in showFiles.toggle() }
         .onChange(of: isFullScreen) { _, full in
-            if full { manager.showToast("arrow.down.right.and.arrow.up.left", settings.fullscreenControls ? "Move to the top edge for controls · ⌘F to leave" : "Press ⌘F to leave full screen") }
+            if full && !settings.quietFullscreen { manager.showToast("arrow.down.right.and.arrow.up.left", settings.fullscreenControls ? "Move to the top edge for controls · ⌘F to leave" : "Press ⌘F to leave full screen") }
         }
         .onChange(of: manager.state) { _, state in
             if state != .linked { showFiles = false }
@@ -59,14 +65,17 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.flexible)
+        }
+        ToolbarItem(placement: .automatic) {
             DevicePill(manager: manager, cocoon: manager.cocoon)
         }
         if linked {
-            ToolbarItem(placement: .principal) {
+            ToolbarItem(placement: .automatic) {
                 LayoutControls(manager: manager, settings: settings, cocoon: manager.cocoon)
             }
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .automatic) {
                 DeviceControls(manager: manager, settings: settings, showAudio: $showAudio, showInspector: $showFiles, compact: false)
             }
         }
@@ -74,7 +83,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var toastView: some View {
-        if let toast = manager.toast {
+        if let toast = manager.toast, !(isFullScreen && settings.quietFullscreen) {
             HStack(spacing: 10) {
                 Image(systemName: toast.symbol).foregroundStyle(Theme.bifrost)
                 Text(toast.message).font(.callout.weight(.medium))
@@ -226,39 +235,34 @@ struct LayoutControls: View {
     @ObservedObject var cocoon: CocoonBridge
 
     var body: some View {
-        HStack(spacing: 8) {
+        Menu {
             Picker("Layout", selection: $settings.layout) {
                 ForEach(ScreenLayout.allCases) { layout in
                     Label(layout.title, systemImage: layout.symbol).tag(layout)
                 }
             }
-            .pickerStyle(.segmented)
-            .labelStyle(.iconOnly)
-            .help("Screen layout (⌘1 – ⌘5)")
-            Button { settings.swapped.toggle() } label: { Label("Swap", systemImage: "arrow.up.arrow.down") }
-                .help("Swap screens (⌘0)")
+            .pickerStyle(.inline)
+            Toggle("Swap Screens", isOn: $settings.swapped)
             if let playing = cocoon.nowPlaying {
-                Menu {
-                    Section(playing.title) {
-                        let noun = playing.isApp ? "App" : "Game"
-                        Button(manager.hasProfile(.game) ? "Update Layout for This \(noun)" : "Remember Layout for This \(noun)") { manager.rememberLayout(.game) }
-                        if manager.hasProfile(.game) { Button("Forget This \(noun)’s Layout") { manager.forgetLayout(.game) } }
-                    }
+                let noun = playing.isApp ? "App" : "Game"
+                Section("\(playing.title)") {
+                    Button(manager.hasProfile(.game) ? "Update Layout for This \(noun)" : "Remember Layout for This \(noun)") { manager.rememberLayout(.game) }
+                    if manager.hasProfile(.game) { Button("Forget This \(noun)’s Layout") { manager.forgetLayout(.game) } }
                     if !playing.isApp {
-                        Section(Systems.name(for: playing.system)) {
-                            Button(manager.hasProfile(.system) ? "Update Layout for All \(Systems.name(for: playing.system)) Games" : "Remember Layout for All \(Systems.name(for: playing.system)) Games") { manager.rememberLayout(.system) }
-                            if manager.hasProfile(.system) { Button("Forget System Layout") { manager.forgetLayout(.system) } }
-                            if let suggestion = LayoutProfiles.suggestion(for: playing.system), suggestion != settings.layout {
-                                Button("Try Suggested: \(suggestion.title)") { settings.layout = suggestion }
-                            }
+                        Button(manager.hasProfile(.system) ? "Update Layout for All \(Systems.name(for: playing.system)) Games" : "Remember Layout for All \(Systems.name(for: playing.system)) Games") { manager.rememberLayout(.system) }
+                        if manager.hasProfile(.system) { Button("Forget \(Systems.name(for: playing.system)) Layout") { manager.forgetLayout(.system) } }
+                        if let suggestion = LayoutProfiles.suggestion(for: playing.system), suggestion != settings.layout {
+                            Button("Try Suggested: \(suggestion.title)") { settings.layout = suggestion }
                         }
                     }
-                } label: {
-                    Label(playing.isApp ? "App Layout" : "Game Layout", systemImage: "rectangle.3.group")
                 }
-                .help("Remember this layout for \(playing.title)")
             }
+        } label: {
+            Label("Layout: \(settings.layout.title)", systemImage: settings.layout.symbol)
         }
+        .menuIndicator(.visible)
+        .fixedSize()
+        .help("Screen layout: \(settings.layout.title) (⌘1 – ⌘5, ⌘0 swaps)")
         .disabled(manager.screens.count < 2)
     }
 }
@@ -269,27 +273,6 @@ struct DeviceControls: View {
     @Binding var showAudio: Bool
     @Binding var showInspector: Bool
     var compact: Bool
-
-    private var recordModePicker: some View {
-        Picker("Record", selection: $settings.recordLayout) {
-            Text("Separate Screens").tag(false)
-            Text("Window Layout").tag(true)
-        }
-        .pickerStyle(.inline)
-        .disabled(manager.recording)
-    }
-
-    private var recordOptions: some View {
-        Menu {
-            recordModePicker
-            Divider()
-            Toggle("Instant Replay", isOn: $settings.replayEnabled)
-        } label: {
-            Label("Recording Options", systemImage: "chevron.down")
-        }
-        .menuIndicator(.hidden)
-        .help("Recording options")
-    }
 
     private func replay() {
         if settings.replayEnabled {
@@ -305,14 +288,20 @@ struct DeviceControls: View {
             Button { manager.press(AndroidKey.back) } label: { Label("Back", systemImage: "chevron.backward") }.help("Back (right click)")
             Button { manager.press(AndroidKey.home) } label: { Label("Home", systemImage: "circle") }.help("Home (middle click)")
             Button { manager.press(AndroidKey.appSwitch) } label: { Label("Recents", systemImage: "square.on.square") }.help("Recent apps")
+            Button { manager.closeForegroundApp() } label: { Label("Close App", systemImage: "xmark.app") }.help("Close the app in front (⌃⌘W)")
         }
 
-        Button { showAudio.toggle() } label: {
-            Label("Audio", systemImage: settings.muted || !settings.audioEnabled ? "speaker.slash" : "speaker.wave.2")
-        }
-        .help("Volume")
-        .popover(isPresented: $showAudio, arrowEdge: .bottom) {
-            AudioPanel(manager: manager, settings: settings)
+        Cluster(compact: compact) {
+            Button { manager.toggleMute() } label: {
+                Label(settings.muted ? "Unmute" : "Mute", systemImage: settings.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+            }
+            .foregroundStyle(settings.muted ? Color.red : Color.primary)
+            .help(settings.muted ? "Unmute (⇧⌘M)" : "Mute (⇧⌘M)")
+            Button { showAudio.toggle() } label: { Label("Volume", systemImage: "slider.horizontal.3") }
+                .help("Volume per screen")
+                .popover(isPresented: $showAudio, arrowEdge: .bottom) {
+                    AudioPanel(manager: manager, settings: settings)
+                }
         }
 
         Cluster(compact: compact) {
@@ -320,39 +309,39 @@ struct DeviceControls: View {
                 .help("Screenshot (⇧⌘S)")
             Button { replay() } label: { Label("Save Replay", systemImage: "clock.arrow.circlepath") }
                 .help(settings.replayEnabled ? "Save the last \(settings.replaySeconds) seconds (⌥⌘S)" : "Instant replay is off. Click to start keeping the last \(settings.replaySeconds) seconds")
-            if compact {
-                Button { manager.toggleRecording() } label: {
-                    Label(manager.recording ? "Stop Recording" : "Record", systemImage: manager.recording ? "stop.circle.fill" : "record.circle")
-                }
-                .help(manager.recording ? "Stop recording (⇧⌘R)" : "Record (⇧⌘R)")
-                recordOptions
-            } else {
-                Menu {
-                    Button(manager.recording ? "Stop Recording" : "Start Recording") { manager.toggleRecording() }
-                    Divider()
-                    recordModePicker
-                } label: {
-                    Label(manager.recording ? "Stop Recording" : "Record", systemImage: manager.recording ? "stop.circle.fill" : "record.circle")
-                } primaryAction: {
-                    manager.toggleRecording()
-                }
-                .help(manager.recording ? "Stop recording (⇧⌘R)" : "Record \(settings.recordLayout ? "the window layout" : "each screen") (⇧⌘R). Click and hold for options")
+            Button { manager.toggleRecording() } label: {
+                Label(manager.recording ? "Stop Recording" : "Record", systemImage: manager.recording ? "stop.circle.fill" : "record.circle")
             }
+            .foregroundStyle(manager.recording ? Color.red : Color.primary)
+            .help(manager.recording ? "Stop recording (⇧⌘R)" : "Record \(settings.recordLayout ? "the window layout" : "each screen") (⇧⌘R)")
         }
 
         Menu {
-            Toggle("Cinema Mode", isOn: $settings.cinemaMode)
-            Toggle("MetalFX Upscaling", isOn: $settings.upscaling)
-            Toggle("Stats Overlay", isOn: $settings.statsOverlay)
+            Section("Picture") {
+                Toggle("Cinema Mode", isOn: $settings.cinemaMode)
+                Toggle("MetalFX Upscaling", isOn: $settings.upscaling)
+                Toggle("Stats Overlay", isOn: $settings.statsOverlay)
+            }
+            Section("Recording") {
+                Picker("Record", selection: $settings.recordLayout) {
+                    Text("Each Screen Separately").tag(false)
+                    Text("The Window Layout").tag(true)
+                }
+                .pickerStyle(.inline)
+                .disabled(manager.recording)
+                Toggle("Instant Replay", isOn: $settings.replayEnabled)
+            }
+            Section("Thor") {
+                Button(manager.mirroringPaused ? "Resume Mirroring" : "Pause Mirroring") { manager.toggleMirroring() }
+                Button(manager.panelsOn ? "Turn Thor Screens Off" : "Turn Thor Screens On") { manager.togglePanels() }
+                Button("Rotate") { manager.rotate() }
+                Button("Show Notifications") { manager.expandNotifications() }
+            }
         } label: {
-            Label("View", systemImage: settings.cinemaMode ? "sparkles.tv.fill" : "sparkles.tv")
+            Label("More", systemImage: "ellipsis.circle")
         }
-        .help("Cinema mode, upscaling and stats (⌥⌘C · ⌥⌘U · ⌥⌘I)")
-
-        Button { manager.togglePanels() } label: {
-            Label("Thor Screens", systemImage: manager.panelsOn ? "sun.max" : "moon.zzz")
-        }
-        .help(manager.panelsOn ? "Turn the Thor’s own screens off. Mirroring continues (⇧⌘P)" : "Turn the Thor’s screens back on (⇧⌘P)")
+        .menuIndicator(.hidden)
+        .help("Picture, recording and Thor options")
 
         Button { NSApp.keyWindow?.toggleFullScreen(nil) } label: {
             Label(compact ? "Leave Full Screen" : "Full Screen", systemImage: compact ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
@@ -456,5 +445,37 @@ struct Cluster<Content: View>: View {
             ControlGroup { content }
                 .controlGroupStyle(.navigation)
         }
+    }
+}
+
+struct SidePanel<Content: View>: View {
+    @Binding var width: Double
+    @ViewBuilder var content: Content
+    @State private var dragStart: Double?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(width: 1)
+                .overlay {
+                    Color.clear
+                        .frame(width: 8)
+                        .contentShape(Rectangle())
+                        .onHover { inside in
+                            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                        }
+                        .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                if dragStart == nil { dragStart = width }
+                                width = min(640, max(320, (dragStart ?? width) - value.translation.width))
+                            }
+                            .onEnded { _ in dragStart = nil })
+                }
+            content
+                .frame(width: width)
+                .frame(maxHeight: .infinity)
+        }
+        .background(.regularMaterial)
     }
 }

@@ -19,7 +19,7 @@ final class AudioOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var tapConsumers: [String: (AVAudioPCMBuffer, AVAudioTime) -> Void] = [:]
     private var started = false
-    var maxLatencyFrames = Int(AudioOutput.sampleRate * 0.08)
+    var maxLatencyFrames = Int(AudioOutput.sampleRate * 0.16)
 
     init() {
         for channel in AudioChannel.allCases {
@@ -101,8 +101,22 @@ final class AudioOutput: @unchecked Sendable {
             lock.unlock()
             return
         }
-        queued[channel] = pending + frames
+        let cushion = pending == 0 ? Int(AudioOutput.sampleRate * 0.04) : 0
+        queued[channel] = pending + frames + cushion
         lock.unlock()
+
+        if cushion > 0, let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(cushion)) {
+            silence.frameLength = AVAudioFrameCount(cushion)
+            if let channels = silence.floatChannelData {
+                for c in 0..<Int(format.channelCount) { channels[c].update(repeating: 0, count: cushion) }
+            }
+            player.scheduleBuffer(silence) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                self.queued[channel] = max(0, (self.queued[channel] ?? 0) - cushion)
+                self.lock.unlock()
+            }
+        }
 
         buffer.frameLength = AVAudioFrameCount(frames)
         let left = buffer.floatChannelData![0]

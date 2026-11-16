@@ -217,6 +217,24 @@ struct StageView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .blur(radius: manager.mirroringPaused ? 18 : 0)
+            .allowsHitTesting(!manager.mirroringPaused)
+            .overlay {
+                if manager.mirroringPaused {
+                    VStack(spacing: 10) {
+                        Image(systemName: "pause.circle.fill").font(.system(size: 44)).foregroundStyle(Theme.bifrost)
+                        Text("Mirroring paused").font(.title3.weight(.semibold))
+                        Text("The Thor isn’t streaming. Its screens and sound are back on the device, files and the library still work.")
+                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 320)
+                        Button("Resume Mirroring") { manager.toggleMirroring() }
+                            .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: [])
+                    }
+                    .padding(24)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.25), value: manager.mirroringPaused)
             .animation(spring, value: settings.layout)
             .animation(spring, value: settings.swapped)
 

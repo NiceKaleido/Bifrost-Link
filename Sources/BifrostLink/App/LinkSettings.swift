@@ -98,6 +98,7 @@ final class LinkSettings: ObservableObject {
     @Published var autoSaveBackup: Bool { didSet { defaults.set(autoSaveBackup, forKey: "autoSaveBackup") } }
     @Published var saveBackupKeep: Int { didSet { defaults.set(saveBackupKeep, forKey: "saveBackupKeep") } }
     @Published var fullscreenControls: Bool { didSet { defaults.set(fullscreenControls, forKey: "fullscreenControls") } }
+    @Published var quietFullscreen: Bool { didSet { defaults.set(quietFullscreen, forKey: "quietFullscreen") } }
     @Published var downloadFolder: String { didSet { defaults.set(downloadFolder, forKey: "downloadFolder") } }
 
     static func defaultFolder(for title: String) -> String {
@@ -130,8 +131,13 @@ final class LinkSettings: ObservableObject {
         masterVolume = value("masterVolume", 0.9)
         topVolume = value("topVolume", 1.0)
         bottomVolume = value("bottomVolume", 1.0)
-        muted = value("muted", false)
-        audioEnabled = value("audioEnabled", true)
+        let legacyAudioOff = !value("audioEnabled", true)
+        muted = value("muted", false) || legacyAudioOff
+        audioEnabled = true
+        if legacyAudioOff {
+            UserDefaults.standard.set(true, forKey: "audioEnabled")
+            UserDefaults.standard.set(true, forKey: "muted")
+        }
         perScreenAudio = value("perScreenAudio", true)
         playOnDevice = value("playOnDevice", false)
         keepAwake = value("keepAwake", true)
@@ -152,6 +158,7 @@ final class LinkSettings: ObservableObject {
         autoSaveBackup = value("autoSaveBackup", true)
         saveBackupKeep = value("saveBackupKeep", 10)
         fullscreenControls = value("fullscreenControls", true)
+        quietFullscreen = value("quietFullscreen", true)
         downloadFolder = value("downloadFolder", home.appendingPathComponent("Downloads").path)
     }
 }

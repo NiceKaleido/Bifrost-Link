@@ -39,6 +39,8 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var focusedRole: ScreenRole = .top
     @Published private(set) var lidClosed = false
     @Published private(set) var panelsOn = true
+    @Published private(set) var mirroringPaused = false
+    private var panelsBeforePause: Bool?
     @Published private(set) var recording = false
     @Published private(set) var recordingStarted: Date?
     @Published private(set) var gamepads: [String] = []
@@ -99,9 +101,6 @@ final class DeviceManager: ObservableObject {
         files.onPushed = { [weak self] remote in
             self?.screen(.top)?.control?.scanFile(remote)
         }
-        settings.$muted.dropFirst().removeDuplicates().sink { [weak self] muted in
-            DispatchQueue.main.async { self?.applyDeviceMute(muted) }
-        }.store(in: &cancellables)
         settings.$masterVolume.combineLatest(settings.$muted).sink { [weak self] volume, muted in
             self?.audio.setMasterVolume(muted ? 0 : Float(volume))
         }.store(in: &cancellables)
@@ -109,10 +108,7 @@ final class DeviceManager: ObservableObject {
         settings.$bottomVolume.sink { [weak self] v in self?.audio.setVolume(Float(v), for: .bottom) }.store(in: &cancellables)
         settings.$perScreenAudio.combineLatest(settings.$playOnDevice).dropFirst().sink { [weak self] per, dup in
             self?.router?.reconfigure(perScreen: per, playOnDevice: dup)
-        }.store(in: &cancellables)
-        settings.$audioEnabled.dropFirst().sink { [weak self] enabled in
-            guard let self, self.state == .linked else { return }
-            if enabled { self.startAudio() } else { self.router?.stop(); self.router = nil }
+            DispatchQueue.main.async { self?.applyThorVolume() }
         }.store(in: &cancellables)
         settings.$gamepadEnabled.dropFirst().sink { [weak self] enabled in
             guard let self else { return }
@@ -297,7 +293,7 @@ final class DeviceManager: ObservableObject {
         power = guardian
         await guardian.start()
 
-        if settings.audioEnabled { startAudio() }
+        startAudio()
         files.reset(serial: serial)
         emulation.reset(serial: serial)
         backups.reset(serial: serial)
@@ -308,6 +304,11 @@ final class DeviceManager: ObservableObject {
             await self.emulation.refreshFolders()
             self.cocoon.start(serial: serial, cocoonRoot: self.emulation.cocoonRoot)
             await self.backups.autoBackupIfDue()
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard self.state == .linked, self.serial == serial else { return }
+            if self.emulation.lastScan == nil && !self.emulation.scanning { await self.emulation.scan() }
+            guard self.state == .linked, self.serial == serial else { return }
+            if self.cleanup.usage.isEmpty && !self.cleanup.scanning { await self.cleanup.scan() }
         }
         startBatteryPolling(serial: serial)
         updateAmbient(settings.cinemaMode)
@@ -315,7 +316,7 @@ final class DeviceManager: ObservableObject {
         DispatchQueue.main.async {
             self.updateReplay()
             self.updateStatsLoop()
-            if self.settings.muted { self.applyDeviceMute(true) }
+            self.applyThorVolume()
         }
     }
 
@@ -369,13 +370,40 @@ final class DeviceManager: ObservableObject {
     nonisolated private static func ambientImage(_ buffer: CVPixelBuffer?, context: CIContext) -> CGImage? {
         guard let buffer else { return nil }
         let image = CIImage(cvPixelBuffer: buffer)
-        let scale = 24 / max(image.extent.width, 1)
-        let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard image.extent.width > 0, image.extent.height > 0 else { return nil }
+        let probeWidth = 64
+        let probeScale = CGFloat(probeWidth) / image.extent.width
+        let probe = image.transformed(by: CGAffineTransform(scaleX: probeScale, y: probeScale))
+        let probeHeight = max(1, Int(probe.extent.height.rounded()))
+        var pixels = [UInt8](repeating: 0, count: probeWidth * probeHeight * 4)
+        context.render(probe, toBitmap: &pixels, rowBytes: probeWidth * 4,
+                       bounds: CGRect(x: probe.extent.minX, y: probe.extent.minY, width: CGFloat(probeWidth), height: CGFloat(probeHeight)),
+                       format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        var minX = probeWidth, maxX = -1, minY = probeHeight, maxY = -1
+        for y in 0..<probeHeight {
+            for x in 0..<probeWidth {
+                let i = (y * probeWidth + x) * 4
+                if max(pixels[i], pixels[i + 1], pixels[i + 2]) > 28 {
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+        }
+        guard maxX >= minX, maxY >= minY, (maxX - minX + 1) * (maxY - minY + 1) >= 12 else { return nil }
+        let unit = 1 / probeScale
+        let content = CGRect(x: image.extent.minX + CGFloat(minX) * unit,
+                             y: image.extent.minY + CGFloat(probeHeight - 1 - maxY) * unit,
+                             width: CGFloat(maxX - minX + 1) * unit,
+                             height: CGFloat(maxY - minY + 1) * unit).intersection(image.extent)
+        let cropped = image.cropped(to: content).transformed(by: CGAffineTransform(translationX: -content.minX, y: -content.minY))
+        let target = CGSize(width: 24, height: max(1, (24 * image.extent.height / image.extent.width).rounded()))
+        let small = cropped.transformed(by: CGAffineTransform(scaleX: target.width / content.width, y: target.height / content.height))
+        let extent = CGRect(origin: .zero, size: target)
         let blurred = small.clampedToExtent()
             .applyingGaussianBlur(sigma: 2.2)
-            .cropped(to: small.extent)
+            .cropped(to: extent)
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.3, kCIInputBrightnessKey: -0.08])
-        return context.createCGImage(blurred, from: small.extent)
+        return context.createCGImage(blurred, from: extent)
     }
 
     private func startAudio() {
@@ -410,7 +438,22 @@ final class DeviceManager: ObservableObject {
 
     private func startBatteryPolling(serial: String) {
         batteryTask?.cancel()
+        let layoutTask = Task { [weak self] in
+            var last: Bool?
+            while !Task.isCancelled {
+                if let out = try? await ADB.shared.shell("settings get system flip_button_layout", serial: serial, timeout: 5) {
+                    let nintendo = out.trimmingCharacters(in: .whitespacesAndNewlines) != "1"
+                    if nintendo != last {
+                        last = nintendo
+                        self?.gamepad.nintendoLayout = nintendo
+                        Log.write("thor controller style: \(nintendo ? "nintendo" : "xbox")")
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+        }
         batteryTask = Task { [weak self] in
+            defer { layoutTask.cancel() }
             while !Task.isCancelled {
                 if let out = try? await ADB.shared.shell("dumpsys battery", serial: serial, timeout: 5) {
                     var level: Int?
@@ -478,6 +521,8 @@ final class DeviceManager: ObservableObject {
         gamepad.detach(sendDestroy: devicePresent)
         router?.stop()
         router = nil
+        mirroringPaused = false
+        panelsBeforePause = nil
         if devicePresent {
             if let power {
                 await power.releaseDevice()
@@ -507,18 +552,6 @@ final class DeviceManager: ObservableObject {
 
     private static let volumeMarker = "/data/local/tmp/bifrost-volume"
     private static let volumeRestoreShell = "[ -f \(volumeMarker) ] && cmd media_session volume --stream 3 --set $(cat \(volumeMarker)) >/dev/null 2>&1; rm -f \(volumeMarker)"
-
-    private func applyDeviceMute(_ muted: Bool) {
-        guard let serial, state == .linked else { return }
-        Task {
-            if muted {
-                _ = try? await ADB.shared.shell("[ -f \(Self.volumeMarker) ] || cmd media_session volume --stream 3 --get 2>/dev/null | sed -n 's/.*volume is \\([0-9]*\\).*/\\1/p' > \(Self.volumeMarker); cmd media_session volume --stream 3 --set 0 >/dev/null 2>&1", serial: serial, timeout: 10)
-            } else {
-                _ = try? await ADB.shared.shell(Self.volumeRestoreShell, serial: serial, timeout: 10)
-            }
-            Log.write("thor media volume \(muted ? "muted" : "restored")")
-        }
-    }
 
     private struct RadioState: Codable {
         var wifi: Bool
@@ -599,6 +632,68 @@ final class DeviceManager: ObservableObject {
 
     func press(_ keycode: Int32) {
         focusedScreen?.control?.pressKey(keycode)
+    }
+
+    func toggleMirroring() {
+        guard state == .linked else { return }
+        let pause = !mirroringPaused
+        mirroringPaused = pause
+        for screen in screens {
+            if pause { screen.control?.pauseVideo() } else { screen.control?.resumeVideo() }
+        }
+        if pause {
+            router?.stop()
+            router = nil
+            panelsBeforePause = power?.panelsOn
+            power?.applyPanels(true)
+            applyThorVolume()
+            Log.write("mirroring paused")
+            showToast("pause.circle", "Mirroring paused, the Thor’s screens are back on")
+        } else {
+            startAudio()
+            applyThorVolume()
+            if panelsBeforePause == false { power?.applyPanels(false) }
+            panelsBeforePause = nil
+            Log.write("mirroring resumed")
+            showToast("play.circle", "Mirroring resumed")
+        }
+    }
+
+    func applyThorVolume() {
+        guard let serial, state == .linked else { return }
+        let full = !mirroringPaused && !settings.playOnDevice
+        Task {
+            if full {
+                _ = try? await ADB.shared.shell("[ -f \(Self.volumeMarker) ] || cmd media_session volume --stream 3 --get 2>/dev/null | sed -n 's/.*volume is \\([0-9]*\\).*/\\1/p' > \(Self.volumeMarker); max=$(cmd media_session volume --stream 3 --get 2>/dev/null | sed -n 's/.*\\.\\.\\([0-9]*\\)\\].*/\\1/p'); cmd media_session volume --stream 3 --set ${max:-15} >/dev/null 2>&1", serial: serial, timeout: 10)
+            } else {
+                _ = try? await ADB.shared.shell(Self.volumeRestoreShell, serial: serial, timeout: 10)
+            }
+            Log.write(full ? "thor media volume at full while linked" : "thor media volume restored")
+        }
+    }
+
+    func closeForegroundApp() {
+        guard let serial, state == .linked else { return }
+        let target = focusedScreen ?? screen(.top)
+        let displayId = target?.displayId ?? 0
+        Task {
+            guard let listing = try? await ADB.shared.shell("cmd activity stack list", serial: serial, timeout: 5) else { return }
+            let visible = AudioRouter.visiblePackages(listing)
+            let candidates = (visible[displayId] ?? []) + (visible[0] ?? [])
+            guard let package = candidates.first(where: { !CocoonBridge.homePackages.contains($0) }) else {
+                showToast("house", "Nothing to close, you’re on the home screen")
+                return
+            }
+            _ = try? await ADB.shared.shell("am force-stop \(ADB.quote(package))", serial: serial, timeout: 10)
+            let name = EmulatorUpdater.knownNames[package] ?? EmulatorUpdater.prettyName(package)
+            Log.write("closed \(package)")
+            showToast("xmark.app", "Closed \(name)")
+        }
+    }
+
+    func toggleMute() {
+        settings.muted.toggle()
+        showToast(settings.muted ? "speaker.slash.fill" : "speaker.wave.2.fill", settings.muted ? "Muted" : "Sound on")
     }
 
     func togglePanels() {

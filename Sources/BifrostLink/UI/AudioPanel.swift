@@ -33,7 +33,7 @@ struct AudioPanel: View {
             HStack {
                 Text("Audio").font(.headline)
                 Spacer()
-                Toggle("Enabled", isOn: $settings.audioEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
+                Toggle("Mute", isOn: $settings.muted).toggleStyle(.switch).controlSize(.small)
             }
 
             HStack(alignment: .top, spacing: 10) {

@@ -13,6 +13,8 @@ final class AudioRouter {
     private var uidCache: [String: Int] = [:]
     private var pollTask: Task<Void, Never>?
     private var physicalOutputs: Set<Int> = []
+    private var lastTopUids: Set<Int> = []
+    private var lastBottomUids: Set<Int> = []
     private var physicalCheckedAt = Date.distantPast
     private var lastReroute: [AudioChannel: Date] = [:]
     private(set) var apps: [AudioChannel: [String]] = [:]
@@ -89,6 +91,8 @@ final class AudioRouter {
         let topUids = Set(topPackages.compactMap { uidCache[$0] }).filter { $0 >= 10000 }
         let bottomUids = Set(bottomPackages.compactMap { uidCache[$0] }).filter { $0 >= 10000 }.subtracting(topUids)
         let union = topUids.union(bottomUids)
+        lastTopUids = topUids
+        lastBottomUids = bottomUids
 
         let newApps: [AudioChannel: [String]] = [.top: topPackages, .bottom: bottomPackages.filter { uidCache[$0].map(bottomUids.contains) ?? false }]
         if newApps != apps {
@@ -139,6 +143,10 @@ final class AudioRouter {
             let parts = entry.key.split(separator: "|", omittingEmptySubsequences: false)
             let uids = parts.count > 1 ? parts[1].split(separator: ",").compactMap { Int($0) } : []
             let exclude = parts.count > 2 && parts[2] == "true"
+            retire(entry)
+            running[channel] = nil
+            output.flush(channel)
+            try? await Task.sleep(nanoseconds: 150_000_000)
             launch(channel: channel, uids: uids, exclude: exclude, key: entry.key)
         }
     }
@@ -225,6 +233,8 @@ final class AudioRouter {
                 if let previous {
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     self.retire(previous)
+                    try? await Task.sleep(nanoseconds: 900_000_000)
+                    await self.enforceRouting(top: self.lastTopUids, bottom: self.lastBottomUids)
                 }
             } catch {
                 NSLog("Audio %@ failed: %@", channel.rawValue, error.localizedDescription)

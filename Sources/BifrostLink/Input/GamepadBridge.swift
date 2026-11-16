@@ -13,6 +13,12 @@ final class GamepadBridge: @unchecked Sendable {
     }
 
     var identity: Identity = .odin
+    private let layoutLock = NSLock()
+    private var nintendoLayoutStorage = true
+    var nintendoLayout: Bool {
+        get { layoutLock.lock(); defer { layoutLock.unlock() }; return nintendoLayoutStorage }
+        set { layoutLock.lock(); nintendoLayoutStorage = newValue; layoutLock.unlock() }
+    }
 
     static let descriptor: [UInt8] = [
         0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
@@ -138,7 +144,7 @@ final class GamepadBridge: @unchecked Sendable {
             UInt16(clamping: Int(max(0, min(1, v)) * 1023))
         }
         var buttons: UInt16 = 0
-        let nintendo = identity == .odin
+        let nintendo = identity == .odin && nintendoLayout
         if pad.buttonA.isPressed { buttons |= 1 << (nintendo ? 1 : 0) }
         if pad.buttonB.isPressed { buttons |= 1 << (nintendo ? 0 : 1) }
         if pad.buttonX.isPressed { buttons |= 1 << (nintendo ? 4 : 3) }

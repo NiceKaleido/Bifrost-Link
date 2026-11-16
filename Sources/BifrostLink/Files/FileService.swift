@@ -29,14 +29,17 @@ struct RemoteFile: Identifiable, Hashable {
 
 struct Transfer: Identifiable {
     enum Direction { case upload, download }
-    enum Status: Equatable { case running, done, cancelled, failed(String) }
+    enum Status: Equatable { case queued, running, done, cancelled, failed(String) }
     let id = UUID()
     let direction: Direction
     let name: String
     let totalBytes: Int64
     var transferred: Int64 = 0
-    var status: Status = .running
+    var status: Status = .queued
     let destination: String
+    var args: [String] = []
+    var source: String = ""
+    var isActive: Bool { status == .queued || status == .running }
     var progress: Double { totalBytes > 0 ? min(1, Double(transferred) / Double(totalBytes)) : 0 }
 }
 
@@ -307,51 +310,99 @@ final class FileService: ObservableObject {
     func upload(_ urls: [URL], to remoteDir: String? = nil) {
         let dir = remoteDir ?? path
         for url in urls {
-            let size = Self.localSize(url)
             let remote = (dir as NSString).appendingPathComponent(url.lastPathComponent)
-            let transfer = Transfer(direction: .upload, name: url.lastPathComponent, totalBytes: size, destination: remote)
-            transfers.insert(transfer, at: 0)
-            run(transfer: transfer, args: ["push", url.path, remote], progress: { [weak self] in
-                await self?.remoteSize(remote) ?? 0
-            }) { [weak self] ok in
-                guard let self else { return }
-                if ok {
-                    self.sizeCache.removeAll()
-                    self.onPushed?(remote)
-                    if (remote as NSString).deletingLastPathComponent == self.path {
-                        Task { await self.reload() }
-                    }
-                }
-            }
+            var transfer = Transfer(direction: .upload, name: url.lastPathComponent, totalBytes: Self.localSize(url), destination: remote)
+            transfer.args = ["push", url.path, remote]
+            transfer.source = url.path
+            transfers.append(transfer)
         }
+        pump()
     }
 
     func download(_ files: [RemoteFile], to folder: URL) {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var claimed = Set(transfers.filter(\.isActive).map(\.destination))
         for file in files {
             var local = folder.appendingPathComponent(file.name)
             var n = 2
-            while FileManager.default.fileExists(atPath: local.path) {
+            while FileManager.default.fileExists(atPath: local.path) || claimed.contains(local.path) {
                 let base = (file.name as NSString).deletingPathExtension
                 let ext = (file.name as NSString).pathExtension
                 local = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
                 n += 1
             }
-            let destination = local
-            let transfer = Transfer(direction: .download, name: file.name, totalBytes: file.isDirectory ? 0 : file.size, destination: destination.path)
-            transfers.insert(transfer, at: 0)
-            run(transfer: transfer, args: ["pull", "-a", file.path, destination.path], progress: {
-                Self.localSize(destination)
-            }) { _ in }
+            claimed.insert(local.path)
+            var transfer = Transfer(direction: .download, name: file.name, totalBytes: file.isDirectory ? 0 : file.size, destination: local.path)
+            transfer.args = ["pull", "-a", file.path, local.path]
+            transfer.source = file.path
+            transfers.append(transfer)
+        }
+        pump()
+    }
+
+    var activeCount: Int { transfers.filter(\.isActive).count }
+    var isIdle: Bool { activeCount == 0 }
+
+    func waitUntilIdle() async {
+        while !isIdle && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 500_000_000)
         }
     }
 
-    private var processes: [UUID: Process] = [:]
+    private var current: (id: UUID, process: Process?)?
+
+    private func pump() {
+        guard current == nil, let next = transfers.first(where: { $0.status == .queued }) else { return }
+        guard let serial else { return }
+        let id = next.id
+        current = (id, nil)
+        update(id) { $0.status = .running }
+        Task {
+            let poller = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    guard !Task.isCancelled, let bytes = await self.measureProgress(next) else { continue }
+                    self.update(id) { if bytes > $0.transferred { $0.transferred = min(bytes, max($0.totalBytes, bytes)) } }
+                }
+            }
+            let result = try? await ADB.shared.run(next.args, serial: serial, timeout: 0) { process in
+                Task { @MainActor in if self.current?.id == id { self.current = (id, process) } }
+            }
+            poller.cancel()
+            let ok = result?.ok ?? false
+            self.update(id) {
+                guard $0.status != .cancelled else { return }
+                $0.status = ok ? .done : .failed(result?.stderr.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n").last.map(String.init) ?? "Transfer failed")
+                if ok { $0.transferred = max($0.totalBytes, $0.transferred) }
+            }
+            if ok, next.direction == .upload {
+                self.sizeCache.removeAll()
+                self.onPushed?(next.destination)
+                if (next.destination as NSString).deletingLastPathComponent == self.path { await self.reload() }
+            }
+            self.current = nil
+            if self.isIdle { await self.loadSpace() }
+            self.pump()
+        }
+    }
+
+    private func measureProgress(_ transfer: Transfer) async -> Int64? {
+        if transfer.direction == .download {
+            let size = Self.localSize(URL(fileURLWithPath: transfer.destination))
+            return size > 0 ? size : nil
+        }
+        guard let serial, let out = try? await ADB.shared.shell("du -sk \(ADB.quote(transfer.destination)) 2>/dev/null | cut -f1", serial: serial, timeout: 4),
+              let kb = Int64(out.trimmingCharacters(in: .whitespacesAndNewlines)), kb > 0 else { return nil }
+        return kb * 1024
+    }
 
     func cancel(_ transfer: Transfer) {
-        guard let process = processes[transfer.id] else { return }
-        update(transfer.id) { $0.status = .cancelled }
-        process.terminate()
+        guard let index = transfers.firstIndex(where: { $0.id == transfer.id }) else { return }
+        let wasRunning = transfers[index].status == .running
+        guard transfers[index].isActive else { return }
+        transfers[index].status = .cancelled
+        guard wasRunning else { return }
+        current?.process?.terminate()
         let destination = transfer.destination
         let direction = transfer.direction
         let serial = self.serial
@@ -365,31 +416,8 @@ final class FileService: ObservableObject {
         }
     }
 
-    private func run(transfer: Transfer, args: [String], progress: @escaping () async -> Int64, completion: @escaping (Bool) -> Void) {
-        guard let serial else { return }
-        let id = transfer.id
-        Task {
-            let poller = Task {
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    let bytes = await progress()
-                    self.update(id) { $0.transferred = bytes }
-                }
-            }
-            let result = try? await ADB.shared.run(args, serial: serial, timeout: 0) { process in
-                Task { @MainActor in self.processes[id] = process }
-            }
-            poller.cancel()
-            self.processes[id] = nil
-            let ok = result?.ok ?? false
-            self.update(id) {
-                guard $0.status != .cancelled else { return }
-                $0.status = ok ? .done : .failed(result?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Transfer failed")
-                if ok { $0.transferred = $0.totalBytes }
-            }
-            completion(ok)
-            await self.loadSpace()
-        }
+    func cancelAll() {
+        for transfer in transfers where transfer.isActive { cancel(transfer) }
     }
 
     private func update(_ id: UUID, _ change: (inout Transfer) -> Void) {
@@ -398,12 +426,7 @@ final class FileService: ObservableObject {
     }
 
     func clearFinished() {
-        transfers.removeAll { $0.status != .running }
-    }
-
-    private func remoteSize(_ path: String) async -> Int64 {
-        guard let serial, let out = try? await ADB.shared.shell("stat -c %s \(ADB.quote(path)) 2>/dev/null", serial: serial, timeout: 3) else { return 0 }
-        return Int64(out.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        transfers.removeAll { !$0.isActive }
     }
 
     nonisolated static func localSize(_ url: URL) -> Int64 {

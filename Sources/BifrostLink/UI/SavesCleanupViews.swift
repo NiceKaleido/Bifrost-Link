@@ -48,6 +48,7 @@ struct SavesView: View {
                 SectionHeader(title: "Snapshots", symbol: "clock.arrow.circlepath", trailing: backups.snapshots.isEmpty ? nil : "\(backups.snapshots.count)")
                 if backups.snapshots.isEmpty {
                     ContentUnavailableView("No backups yet", systemImage: "tray", description: Text("Your first backup is one click away."))
+                        .frame(maxWidth: .infinity)
                 } else {
                     ForEach(backups.snapshots) { snapshot in
                         Card {
@@ -103,11 +104,13 @@ struct CleanupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            GeometryReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if cleanup.usage.isEmpty {
+                        Spacer(minLength: 10)
                         if cleanup.scanning {
-                            ProgressView("Measuring emulator data…").frame(maxWidth: .infinity).padding(.top, 40)
+                            ProgressView("Measuring emulator data…").frame(maxWidth: .infinity)
                         } else {
                             ContentUnavailableView {
                                 Label("Emulator cleanup", systemImage: "sparkles")
@@ -118,13 +121,17 @@ struct CleanupView: View {
                                     .buttonStyle(.borderedProminent)
                                     .disabled(cleanup.serial == nil)
                             }
-                            .padding(.top, 10)
+                            .frame(maxWidth: .infinity)
+                            .fixedSize(horizontal: false, vertical: true)
                         }
+                        Spacer(minLength: 10)
                     } else {
                         ForEach(cleanup.usage) { usage in emulatorCard(usage) }
                     }
                 }
                 .padding(12)
+                .frame(minHeight: proxy.size.height, alignment: .top)
+            }
             }
             if !cleanup.usage.isEmpty {
                 Divider().opacity(0.5)

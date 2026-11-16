@@ -45,8 +45,9 @@ struct SettingsView: View {
             }
             Section {
                 Toggle("Show controls at the top edge in full screen", isOn: $settings.fullscreenControls)
+                Toggle("Hide pop-up messages in full screen", isOn: $settings.quietFullscreen)
             } footer: {
-                footer("Move the pointer to the top of the screen and the controls fade in; they slip away again on their own. Turn this off for a completely clean full screen. ⌘F always leaves full screen.")
+                footer("Move the pointer to the top of the screen and the controls fade in; they slip away again on their own. With pop-ups hidden, messages like “Screenshot saved” or “Saves tucked away” stay out of your game while in full screen. ⌘F always leaves full screen.")
             }
             Section {
                 Picker("Codec", selection: $settings.codec) {

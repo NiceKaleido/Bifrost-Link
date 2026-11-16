@@ -61,7 +61,9 @@ final class EmulationHub: ObservableObject {
     @Published var shrinkCandidates: [ShrinkCandidate] = []
     @Published private(set) var scanning = false
     @Published private(set) var lastScan: Date?
-    @Published var shrinkProgress: ShrinkProgress?
+    @Published var shrinkJobs: [ShrinkJob] = []
+    var shrinkItemTask: Task<ShrinkDone?, Never>?
+    var shrinkProcesses: [ProcessHolder] = []
     @Published var shrinkSelection: Set<String> = []
     @Published var shrunk: [ShrinkDone] = []
     @Published var askRemoveOriginals = false
@@ -324,7 +326,7 @@ final class EmulationHub: ObservableObject {
         return name.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
-    nonisolated static func runTool(_ path: String, _ args: [String], progress: (@Sendable (Double) -> Void)? = nil) async -> Bool {
+    nonisolated static func runTool(_ path: String, _ args: [String], progress: (@Sendable (Double) -> Void)? = nil, onStart: (@Sendable (Process) -> Void)? = nil) async -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
@@ -348,7 +350,10 @@ final class EmulationHub: ObservableObject {
                     errPipe.fileHandleForReading.readabilityHandler = nil
                     continuation.resume(returning: $0.terminationStatus == 0 && $0.terminationReason == .exit)
                 }
-                do { try process.run() } catch { continuation.resume(returning: false) }
+                do {
+                    try process.run()
+                    onStart?(process)
+                } catch { continuation.resume(returning: false) }
             }
         } onCancel: {
             if process.isRunning { process.terminate() }

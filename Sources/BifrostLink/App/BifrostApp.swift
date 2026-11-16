@@ -129,8 +129,14 @@ struct BifrostApp: App {
                     .keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 Button("Play / Pause") { manager.press(AndroidKey.mediaPlayPause) }
                 Divider()
+                Button("Close App in Front") { manager.closeForegroundApp() }
+                    .keyboardShortcut("w", modifiers: [.command, .control])
+                Button(settings.muted ? "Unmute" : "Mute") { manager.toggleMute() }
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Toggle Thor Screens") { manager.togglePanels() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
+                Button(manager.mirroringPaused ? "Resume Mirroring" : "Pause Mirroring") { manager.toggleMirroring() }
+                    .keyboardShortcut("p", modifiers: [.command, .control])
                 Button("Screenshot") { manager.screenshot() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                 Button(manager.recording ? "Stop Recording" : "Start Recording") { manager.toggleRecording() }

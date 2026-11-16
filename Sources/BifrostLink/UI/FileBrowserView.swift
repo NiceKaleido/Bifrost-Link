@@ -22,10 +22,7 @@ struct FileBrowserView: View {
             header
             Divider().opacity(0.5)
             list
-            if !files.transfers.isEmpty {
-                Divider().opacity(0.5)
-                transfers
-            }
+            if !selection.isEmpty { selectionBar }
         }
 
         .alert("New Folder", isPresented: $showNewFolder) {
@@ -59,50 +56,6 @@ struct FileBrowserView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(files.displayName(forPath: files.path) ?? (files.path as NSString).lastPathComponent).font(.headline).lineLimit(1)
-                Spacer()
-                if files.loading || files.measuring { ProgressView().controlSize(.mini) }
-                Button { files.sizeMode.toggle() } label: {
-                    Image(systemName: files.sizeMode ? "chart.bar.xaxis.ascending" : "chart.bar.xaxis")
-                        .foregroundStyle(files.sizeMode ? Theme.accent : .secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(files.sizeMode ? "Hide folder sizes" : "Show folder sizes, biggest first")
-                Button { showLargest = true } label: { Image(systemName: "doc.text.magnifyingglass") }
-                    .buttonStyle(.borderless)
-                    .help("Find the largest files on this storage")
-                Menu {
-                    Toggle("Show Hidden Files", isOn: $files.showHidden)
-                    Divider()
-                    Button("Open Download Folder on Mac") {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: settings.downloadFolder))
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(files.space.isEmpty ? files.places : FileService.folderPlaces, id: \.self) { place in
-                        Button {
-                            selection.removeAll()
-                            files.open(place.path)
-                        } label: {
-                            Label(place.name, systemImage: place.symbol)
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 9).padding(.vertical, 5)
-                                .background(files.path == place.path ? AnyShapeStyle(Theme.accent.opacity(0.35)) : AnyShapeStyle(Theme.panel), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
             if !files.space.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(files.space) { volume in
@@ -114,23 +67,112 @@ struct FileBrowserView: View {
                 }
             }
 
-            HStack(spacing: 4) {
-                Button { selection.removeAll(); files.goUp() } label: { Image(systemName: "chevron.left") }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    placeChips
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) { placeChips }
+                }
+                .defaultScrollAnchor(.trailing)
+            }
+
+            HStack(spacing: 6) {
+                Button { selection.removeAll(); files.goUp() } label: { Image(systemName: "chevron.left").frame(width: 14) }
                     .disabled(files.path == "/")
                     .help("Enclosing folder")
+                    .accessibilityLabel("Enclosing folder")
                 breadcrumbs
-                Spacer(minLength: 4)
-                Button { Task { await files.loadVolumes(); await files.reload(); await files.loadSpace() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh")
-                Button { newFolderName = ""; showNewFolder = true } label: { Image(systemName: "folder.badge.plus") }.help("New folder")
-                Button(action: pickUpload) { Image(systemName: "square.and.arrow.up") }.help("Upload files to this folder")
-                Button(action: downloadSelection) { Image(systemName: "square.and.arrow.down") }
-                    .disabled(selection.isEmpty).help("Download to \(shortPath(settings.downloadFolder))")
-                Button { confirmDelete = true } label: { Image(systemName: "trash") }
-                    .disabled(selection.isEmpty).help("Delete")
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Button { Task { await files.loadVolumes(); await files.reload(); await files.loadSpace() } } label: {
+                    if files.loading { ProgressView().controlSize(.mini).frame(width: 14) } else { Image(systemName: "arrow.clockwise").frame(width: 14) }
+                }
+                .help("Refresh")
+                .accessibilityLabel("Refresh")
             }
-            .buttonStyle(.borderless)
+
+            HStack(spacing: 6) {
+                Button(action: pickUpload) { Label("Upload…", systemImage: "square.and.arrow.up") }
+                    .help("Send files from your Mac into this folder. You can also drop them on the list")
+                Button { newFolderName = ""; showNewFolder = true } label: { Label("New Folder", systemImage: "folder.badge.plus") }
+                Spacer(minLength: 4)
+                Toggle(isOn: $files.sizeMode) {
+                    Label(files.measuring ? "Measuring…" : "Sizes", systemImage: "chart.bar.xaxis")
+                }
+                .toggleStyle(.button)
+                .help(files.sizeMode ? "Hide folder sizes" : "Show folder sizes, biggest first")
+                Menu {
+                    Button("Find Largest Files…") { showLargest = true }
+                    Toggle("Show Hidden Files", isOn: $files.showHidden)
+                    Divider()
+                    Button("Open Download Folder on Mac") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: settings.downloadFolder))
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More")
+            }
+            .controlSize(.small)
         }
         .padding(12)
+    }
+
+    private var placeChips: some View {
+        ForEach(files.space.isEmpty ? files.places : FileService.folderPlaces, id: \.self) { place in
+            Button {
+                selection.removeAll()
+                files.open(place.path)
+            } label: {
+                Label(place.name, systemImage: place.symbol)
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(files.path == place.path ? AnyShapeStyle(Theme.accent.opacity(0.35)) : AnyShapeStyle(Theme.panel), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var selectionBar: some View {
+        let chosen = selectedFiles
+        let bytes = chosen.filter { !$0.isDirectory }.reduce(Int64(0)) { $0 + $1.size }
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(chosen.count == 1 ? chosen[0].name : "\(chosen.count) items selected").font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                if bytes > 0 { Text(bytes.bytesText).font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 4)
+            Button(action: downloadSelection) { Label("Download", systemImage: "square.and.arrow.down") }
+                .help("Download to \(shortPath(settings.downloadFolder))")
+            Menu {
+                Button("Download To…") { downloadTo(chosen) }
+                if chosen.count == 1, let file = chosen.first {
+                    Button("Rename…") {
+                        renaming = nil
+                        renameText = file.name
+                        DispatchQueue.main.async { renaming = file }
+                    }
+                }
+                Divider()
+                Button("Delete…", role: .destructive) { confirmDelete = true }
+            } label: { Image(systemName: "ellipsis") }
+                .menuIndicator(.hidden)
+                .fixedSize()
+            Button { selection.removeAll() } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .help("Clear selection")
+                .accessibilityLabel("Clear selection")
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider().opacity(0.5) }
     }
 
     private var breadcrumbs: some View {
@@ -230,25 +272,6 @@ struct FileBrowserView: View {
             }
             return true
         }
-    }
-
-    private var transfers: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Transfers").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button("Clear") { files.clearFinished() }.buttonStyle(.borderless).font(.caption)
-            }
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(files.transfers) { t in
-                        TransferRow(transfer: t) { files.cancel(t) }
-                    }
-                }
-            }
-            .frame(maxHeight: 150)
-        }
-        .padding(12)
     }
 
     private func shortPath(_ p: String) -> String {
@@ -458,58 +481,5 @@ struct LargestFilesView: View {
     private func relative(_ path: String) -> String {
         let dir = (path as NSString).deletingLastPathComponent
         return dir.hasPrefix(root) ? rootName + String(dir.dropFirst(root.count)) : dir
-    }
-}
-
-struct TransferRow: View {
-    let transfer: Transfer
-    var onCancel: (() -> Void)?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: transfer.direction == .upload ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                .foregroundStyle(statusColor)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(transfer.name).font(.caption).lineLimit(1).truncationMode(.middle)
-                switch transfer.status {
-                case .running:
-                    if transfer.totalBytes > 0 {
-                        ProgressView(value: transfer.progress).controlSize(.mini).tint(Theme.accent)
-                    } else {
-                        ProgressView().progressViewStyle(.linear).controlSize(.mini)
-                    }
-                case .done:
-                    Text(transfer.direction == .upload ? "Sent" : "Saved").font(.caption2).foregroundStyle(.secondary)
-                case .cancelled:
-                    Text("Cancelled").font(.caption2).foregroundStyle(.secondary)
-                case .failed(let message):
-                    Text(message).font(.caption2).foregroundStyle(.red).lineLimit(2)
-                }
-            }
-            Spacer()
-            if transfer.status == .running, let onCancel {
-                Button(action: onCancel) { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .help("Cancel this transfer")
-                    .accessibilityLabel("Cancel transfer")
-            }
-            if transfer.status == .done && transfer.direction == .download {
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: transfer.destination)])
-                } label: { Image(systemName: "magnifyingglass") }
-                .buttonStyle(.borderless)
-                .help("Show in Finder")
-            }
-        }
-    }
-
-    private var statusColor: Color {
-        switch transfer.status {
-        case .running: return Theme.accent
-        case .done: return .green
-        case .cancelled: return .secondary
-        case .failed: return .red
-        }
     }
 }

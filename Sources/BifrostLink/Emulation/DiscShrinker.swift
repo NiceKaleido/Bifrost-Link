@@ -9,19 +9,27 @@ struct ShrinkCandidate: Identifiable, Hashable {
     var id: String { path }
     var name: String { (path as NSString).lastPathComponent }
     var directory: String { (path as NSString).deletingLastPathComponent }
-    var outName: String { (name as NSString).deletingPathExtension + ".chd" }
+    var isZip: Bool { mode == "zip" }
+    var outName: String { (name as NSString).deletingPathExtension + (isZip ? ".zip" : ".chd") }
     var outPath: String { directory + "/" + outName }
-    var estimatedSavings: Int64 { mode == "createdvd" ? size * 25 / 100 : size * 40 / 100 }
+    var estimatedSavings: Int64 {
+        switch mode {
+        case "createdvd": return size * 25 / 100
+        case "zip": return size * 35 / 100
+        default: return size * 40 / 100
+        }
+    }
     var trackCount: Int { members.count - 1 }
 }
 
-struct ShrinkProgress {
-    var index: Int
-    var total: Int
-    var name: String
-    var step: String
+struct ShrinkJob: Identifiable {
+    enum Status: Equatable { case queued, running, done(Int64), failed(String), cancelled }
+    let candidate: ShrinkCandidate
+    var status: Status = .queued
+    var step = "Waiting"
     var fraction: Double?
-    var saved: Int64
+    var id: String { candidate.id }
+    var isActive: Bool { status == .queued || status == .running }
 }
 
 struct ShrinkDone: Identifiable {
@@ -29,13 +37,6 @@ struct ShrinkDone: Identifiable {
     let newSize: Int64
     var id: String { candidate.path }
     var saved: Int64 { candidate.size - newSize }
-}
-
-private final class ProgressBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Double = 0
-    func set(_ v: Double) { lock.lock(); value = v; lock.unlock() }
-    func get() -> Double { lock.lock(); defer { lock.unlock() }; return value }
 }
 
 extension EmulationHub {
@@ -47,6 +48,14 @@ extension EmulationHub {
         "saturn": (["cue", "iso"], false),
     ]
 
+    static let zipSystems: [String: Set<String>] = [
+        "gb": ["gb"], "gbc": ["gbc"], "gba": ["gba"], "nes": ["nes"], "fds": ["fds"],
+        "snes": ["sfc", "smc"], "sfc": ["sfc", "smc"], "n64": ["z64", "n64", "v64"],
+        "genesis": ["md", "gen", "smd", "bin"], "megadrive": ["md", "gen", "smd", "bin"],
+        "mastersystem": ["sms"], "gamegear": ["gg"], "pcengine": ["pce"], "ngp": ["ngp"], "ngpc": ["ngc"],
+        "atari2600": ["a26"], "atari7800": ["a78"], "lynx": ["lnx"], "wonderswan": ["ws"], "wonderswancolor": ["wsc"],
+    ]
+
     var removeOriginalsAfterShrink: Bool {
         get { UserDefaults.standard.bool(forKey: "shrinkRemoveOriginals") }
         set { UserDefaults.standard.set(newValue, forKey: "shrinkRemoveOriginals"); objectWillChange.send() }
@@ -55,6 +64,25 @@ extension EmulationHub {
     func scanShrinkCandidates() async {
         guard let serial else { return }
         var result: [ShrinkCandidate] = []
+        let busy = Set(shrinkJobs.filter(\.isActive).map(\.id))
+        for (system, exts) in Self.zipSystems {
+            guard let folder = folders[system] else { continue }
+            let q = ADB.quote(folder.path)
+            guard let out = try? await ADB.shared.shell("find \(q) -maxdepth 3 -type f -exec stat -c '%s|%n' {} + 2>/dev/null", serial: serial, timeout: 60) else { continue }
+            var sizes: [String: Int64] = [:]
+            for line in out.split(separator: "\n") {
+                let parts = line.split(separator: "|", maxSplits: 1)
+                guard parts.count == 2, let size = Int64(parts[0]) else { continue }
+                sizes[String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)] = size
+            }
+            let archived = Set(sizes.keys.filter { ["zip", "7z"].contains(($0 as NSString).pathExtension.lowercased()) }.map { ($0 as NSString).deletingPathExtension.lowercased() })
+            for (path, size) in sizes {
+                let ext = (path as NSString).pathExtension.lowercased()
+                guard exts.contains(ext), size > 512_000,
+                      !archived.contains((path as NSString).deletingPathExtension.lowercased()) else { continue }
+                result.append(ShrinkCandidate(path: path, members: [path], system: system, size: size, mode: "zip"))
+            }
+        }
         for (system, spec) in Self.shrinkSystems {
             guard let folder = folders[system] else { continue }
             let q = ADB.quote(folder.path)
@@ -105,7 +133,7 @@ extension EmulationHub {
                                               mode: spec.dvd && ext == "iso" ? "createdvd" : "createcd"))
             }
         }
-        shrinkCandidates = result.sorted { $0.size > $1.size }
+        shrinkCandidates = result.filter { !busy.contains($0.id) }.sorted { $0.size > $1.size }
         shrinkSelection = shrinkSelection.intersection(result.map(\.id))
     }
 
@@ -121,129 +149,187 @@ extension EmulationHub {
         return tokens[1..<(tokens.count - 1)].joined(separator: " ")
     }
 
+    var shrinkActive: Bool { shrinkJobs.contains(where: \.isActive) }
+
     func shrinkSelected() {
-        let queue = shrinkCandidates.filter { shrinkSelection.contains($0.id) }
-        guard !queue.isEmpty, shrinkTask == nil else { return }
+        let picked = shrinkCandidates.filter { shrinkSelection.contains($0.id) }
+        guard !picked.isEmpty else { return }
+        shrinkJobs.removeAll { !$0.isActive }
+        let known = Set(shrinkJobs.map(\.id))
+        shrinkJobs.append(contentsOf: picked.filter { !known.contains($0.id) }.map { ShrinkJob(candidate: $0) })
+        shrinkCandidates.removeAll { shrinkSelection.contains($0.id) }
+        shrinkSelection.removeAll()
+        guard shrinkTask == nil else { return }
         shrinkTask = Task { [weak self] in
-            await self?.runShrink(queue)
+            await self?.runShrinkQueue()
             self?.shrinkTask = nil
-            self?.shrinkProgress = nil
         }
     }
 
-    func cancelShrink() {
-        shrinkTask?.cancel()
+    func cancelShrink(_ id: String) {
+        guard let index = shrinkJobs.firstIndex(where: { $0.id == id }), shrinkJobs[index].isActive else { return }
+        let wasRunning = shrinkJobs[index].status == .running
+        shrinkJobs[index].status = .cancelled
+        shrinkJobs[index].step = "Cancelled"
+        shrinkJobs[index].fraction = nil
+        if wasRunning {
+            shrinkItemTask?.cancel()
+            shrinkProcesses.forEach { $0.terminate() }
+        }
+        Log.write("shrink: cancelled \(shrinkJobs[index].candidate.name)")
     }
 
-    private func runShrink(_ queue: [ShrinkCandidate]) async {
-        guard let serial, let tool = Self.tools["chdman"] ?? nil else {
-            toast?("wrench.and.screwdriver", "chdman is missing from this copy of Bifrost")
-            return
-        }
+    func cancelAllShrinks() {
+        for job in shrinkJobs where job.isActive { cancelShrink(job.id) }
+    }
+
+    func clearFinishedShrinks() {
+        shrinkJobs.removeAll { !$0.isActive }
+    }
+
+    private func updateJob(_ id: String, _ change: (inout ShrinkJob) -> Void) {
+        guard let index = shrinkJobs.firstIndex(where: { $0.id == id }) else { return }
+        guard shrinkJobs[index].status != .cancelled else { return }
+        change(&shrinkJobs[index])
+    }
+
+    private func runShrinkQueue() async {
+        guard let serial else { return }
         var done: [ShrinkDone] = []
         var failed: [String] = []
-        var saved: Int64 = 0
-        for (index, candidate) in queue.enumerated() {
-            if Task.isCancelled { break }
-            shrinkProgress = ShrinkProgress(index: index + 1, total: queue.count, name: candidate.name, step: "Preparing", fraction: nil, saved: saved)
+        while let job = shrinkJobs.first(where: { $0.status == .queued }) {
+            let candidate = job.candidate
+            updateJob(job.id) { $0.status = .running; $0.step = "Preparing" }
             let work = FileManager.default.temporaryDirectory.appendingPathComponent("bifrost-shrink-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: work) }
             let free = (try? work.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? Int64.max
-            guard free > candidate.size * 2 + 1_000_000_000 else {
-                toast?("externaldrive.badge.exclamationmark", "Not enough space on the Mac for \(candidate.name), stopped")
-                break
+            if free <= candidate.size * 2 + 1_000_000_000 {
+                updateJob(job.id) { $0.status = .failed("Not enough space on the Mac") }
+                try? FileManager.default.removeItem(at: work)
+                continue
             }
-            if let result = await shrinkOne(candidate, work: work, tool: tool, serial: serial, index: index, total: queue.count, savedSoFar: saved) {
+            let itemTask = Task { [weak self] () -> ShrinkDone? in
+                await self?.shrinkOne(candidate, work: work, serial: serial)
+            }
+            shrinkItemTask = itemTask
+            let result = await itemTask.value
+            shrinkItemTask = nil
+            shrinkProcesses.removeAll()
+            try? FileManager.default.removeItem(at: work)
+            let cancelled = shrinkJobs.first(where: { $0.id == job.id })?.status == .cancelled
+            if let result, !cancelled {
                 done.append(result)
-                saved += result.saved
-                shrinkCandidates.removeAll { $0.id == candidate.id }
-                shrinkSelection.remove(candidate.id)
+                updateJob(job.id) { $0.status = .done(result.saved); $0.step = "Saved \(result.saved.bytesText)"; $0.fraction = 1 }
                 Log.write("shrink: \(candidate.name) \(candidate.size) -> \(result.newSize)")
                 if removeOriginalsAfterShrink { await removeOriginals([result], announce: false) }
-            } else if !Task.isCancelled {
+            } else if cancelled {
+                if let result { _ = try? await ADB.shared.shell("rm -f \(ADB.quote(result.candidate.outPath))", serial: serial, timeout: 10) }
+                shrinkCandidates.append(candidate)
+                shrinkCandidates.sort { $0.size > $1.size }
+            } else {
                 failed.append(candidate.name)
+                updateJob(job.id) { $0.status = .failed("Didn’t work, the original is untouched") }
+                shrinkCandidates.append(candidate)
+                shrinkCandidates.sort { $0.size > $1.size }
             }
         }
-        let cancelled = Task.isCancelled
-        if removeOriginalsAfterShrink || done.isEmpty {
-            if !done.isEmpty { await refreshShrinkList() }
-        } else {
+        guard !done.isEmpty || !failed.isEmpty else { return }
+        let saved = done.reduce(Int64(0)) { $0 + $1.saved }
+        if !removeOriginalsAfterShrink && !done.isEmpty {
             shrunk.append(contentsOf: done)
             askRemoveOriginals = true
         }
-        var message = done.isEmpty ? "Nothing was shrunk" : "Shrunk \(done.count) of \(queue.count), saved \(saved.bytesText)"
-        if !failed.isEmpty { message += ". Failed: \(failed.prefix(2).joined(separator: ", "))\(failed.count > 2 ? " and \(failed.count - 2) more" : "")" }
-        if cancelled { message += ". Stopped" }
-        if done.count > 0 && removeOriginalsAfterShrink { message += ". Rescan in Cocoon" }
+        var message = done.isEmpty ? "Nothing was shrunk" : "Shrunk \(done.count) game\(done.count == 1 ? "" : "s"), saved \(saved.bytesText)"
+        if !failed.isEmpty { message += ". \(failed.count) failed" }
+        if !done.isEmpty && removeOriginalsAfterShrink { message += ". Rescan in Cocoon" }
         toast?(failed.isEmpty ? "arrow.down.right.and.arrow.up.left" : "exclamationmark.triangle", message)
     }
 
-    private func shrinkOne(_ candidate: ShrinkCandidate, work: URL, tool: String, serial: String, index: Int, total: Int, savedSoFar: Int64) async -> ShrinkDone? {
+    private func track(_ process: Process) {
+        let holder = ProcessHolder()
+        holder.set(process)
+        shrinkProcesses.append(holder)
+    }
+
+    private func shrinkOne(_ candidate: ShrinkCandidate, work: URL, serial: String) async -> ShrinkDone? {
+        let id = candidate.id
         func report(_ step: String, _ fraction: Double?) {
-            shrinkProgress = ShrinkProgress(index: index + 1, total: total, name: candidate.name, step: step, fraction: fraction, saved: savedSoFar)
+            updateJob(id) { $0.step = step; $0.fraction = fraction }
         }
+        func advance(_ value: Double) {
+            updateJob(id) { $0.fraction = max($0.fraction ?? 0, min(1, value)) }
+        }
+        if let files, !files.isIdle {
+            report("Waiting for file transfers", nil)
+            await files.waitUntilIdle()
+        }
+        guard !Task.isCancelled else { return nil }
         report("Copying to the Mac", 0)
-        let poll = Task { [weak self] in
+        let poll = Task { @MainActor in
             while !Task.isCancelled {
                 let have = (try? FileManager.default.subpathsOfDirectory(atPath: work.path))?.reduce(Int64(0)) { sum, sub in
                     sum + Int64((try? FileManager.default.attributesOfItem(atPath: work.appendingPathComponent(sub).path)[.size] as? Int) ?? 0)
                 } ?? 0
-                if candidate.size > 0 { self?.shrinkProgress?.fraction = min(1, Double(have) / Double(candidate.size)) }
+                if candidate.size > 0, have > 0 { advance(Double(have) / Double(candidate.size)) }
                 try? await Task.sleep(nanoseconds: 400_000_000)
             }
         }
         var pulled = true
         for remote in candidate.members {
-            let process = ProcessHolder()
-            let r = await withTaskCancellationHandler {
-                try? await ADB.shared.run(["pull", remote, work.path], serial: serial, timeout: 0) { process.set($0) }
-            } onCancel: { process.terminate() }
-            if r?.ok != true { pulled = false; break }
+            let r = try? await ADB.shared.run(["pull", remote, work.path], serial: serial, timeout: 0) { process in
+                Task { @MainActor in self.track(process) }
+            }
+            if r?.ok != true || Task.isCancelled { pulled = false; break }
         }
         poll.cancel()
         guard pulled, !Task.isCancelled else { return nil }
 
         let input = work.appendingPathComponent(candidate.name)
         let output = work.appendingPathComponent(candidate.outName)
-        let box = ProgressBox()
-        report("Compressing", 0)
-        let ticker = Task { [weak self] in
-            while !Task.isCancelled {
-                self?.shrinkProgress?.fraction = box.get()
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
+        let created: Bool
+        if candidate.isZip {
+            report("Zipping", nil)
+            created = await Self.runTool("/usr/bin/zip", ["-9", "-j", "-X", "-q", output.path, input.path], onStart: { p in Task { @MainActor in self.track(p) } })
+        } else {
+            guard let tool = Self.tools["chdman"] ?? nil else { return nil }
+            report("Compressing", 0)
+            created = await Self.runTool(tool, [candidate.mode, "-i", input.path, "-o", output.path, "-f"],
+                                         progress: { value in Task { @MainActor in advance(value) } },
+                                         onStart: { p in Task { @MainActor in self.track(p) } })
         }
-        let created = await Self.runTool(tool, [candidate.mode, "-i", input.path, "-o", output.path, "-f"]) { box.set($0) }
-        ticker.cancel()
         guard created, !Task.isCancelled,
               let newSize = (try? output.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init), newSize > 0 else { return nil }
 
-        report("Checking the new image", nil)
-        let verifyBox = ProgressBox()
-        let verifyTicker = Task { [weak self] in
-            while !Task.isCancelled {
-                self?.shrinkProgress?.fraction = verifyBox.get()
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
+        report("Checking the new file", candidate.isZip ? nil : 0)
+        let verified: Bool
+        if candidate.isZip {
+            verified = await Self.runTool("/usr/bin/unzip", ["-tqq", output.path], onStart: { p in Task { @MainActor in self.track(p) } })
+        } else if let tool = Self.tools["chdman"] ?? nil {
+            verified = await Self.runTool(tool, ["verify", "-i", output.path],
+                                          progress: { value in Task { @MainActor in advance(value) } },
+                                          onStart: { p in Task { @MainActor in self.track(p) } })
+        } else {
+            verified = false
         }
-        let verified = await Self.runTool(tool, ["verify", "-i", output.path]) { verifyBox.set($0) }
-        verifyTicker.cancel()
         guard verified, !Task.isCancelled else { return nil }
         try? FileManager.default.removeItem(at: input)
 
+        if let files, !files.isIdle {
+            report("Waiting for file transfers", nil)
+            await files.waitUntilIdle()
+        }
+        guard !Task.isCancelled else { return nil }
         report("Sending back to the Thor", 0)
-        let pushPoll = Task { [weak self] in
+        let pushPoll = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 let size = Int64(((try? await ADB.shared.shell("stat -c %s \(ADB.quote(candidate.outPath)) 2>/dev/null", serial: serial, timeout: 5)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                if !Task.isCancelled { self?.shrinkProgress?.fraction = min(1, Double(size) / Double(newSize)) }
+                if !Task.isCancelled, size > 0 { advance(Double(size) / Double(newSize)) }
             }
         }
-        let pushProcess = ProcessHolder()
-        let push = await withTaskCancellationHandler {
-            try? await ADB.shared.run(["push", output.path, candidate.outPath], serial: serial, timeout: 0) { pushProcess.set($0) }
-        } onCancel: { pushProcess.terminate() }
+        let push = try? await ADB.shared.run(["push", output.path, candidate.outPath], serial: serial, timeout: 0) { process in
+            Task { @MainActor in self.track(process) }
+        }
         pushPoll.cancel()
         let remoteSize = Int64(((try? await ADB.shared.shell("stat -c %s \(ADB.quote(candidate.outPath)) 2>/dev/null", serial: serial, timeout: 10)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         guard push?.ok == true, remoteSize == newSize, !Task.isCancelled else {
