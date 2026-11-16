@@ -24,6 +24,20 @@ Requirements:
 
 The build bundles `adb`, the patched server and the icon (`Resources/logo.png`) into the app. On launch the app prefers a system adb if one is installed.
 
+## Releases
+
+Every push to `main` builds a release on GitHub (`.github/workflows/release.yml`):
+1. A macOS runner installs the tools Bifrost bundles (`chdman` from Homebrew's `rom-tools`, plus `adb` and `aapt2` from the Android SDK), then runs `./scripts/build-app.sh --dmg`.
+2. The version is the base in `VERSION` plus the workflow run number, for example `1.0.12`. Edit `VERSION` for a bigger jump.
+3. The release notes list every commit since the previous release tag.
+4. The `Bifrost-Link-<version>.dmg` is published as release `v<version>`.
+
+Pushes that only touch Markdown files or `.gitignore` don't create a release. Releases can also be started by hand from the Actions tab.
+
+The app is ad-hoc signed, not notarized, so on another Mac it has to be opened once with right-click ▸ Open. The release notes say so. The build is Apple silicon only. The server jar (`Resources/bifrost-server.jar`) is used as committed, so run `./server/build.sh` and commit the jar after changing `server/bifrost.patch`.
+
+To build the disk image locally: `BIFROST_VERSION=1.0.0 ./scripts/build-app.sh --dmg`.
+
 ## Using it
 
 Plug the Thor in with USB debugging on. Bifrost links automatically.

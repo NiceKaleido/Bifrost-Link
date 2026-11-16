@@ -78,8 +78,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Bifrost Link</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${BIFROST_VERSION:-1.0}</string>
+  <key>CFBundleVersion</key><string>${BIFROST_BUILD:-1}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -90,6 +90,16 @@ PLIST
 
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 echo "Built $APP"
+if [[ "$1" == "--dmg" ]]; then
+  DMG="$ROOT/build/Bifrost-Link-${BIFROST_VERSION:-1.0}.dmg"
+  STAGE="$(mktemp -d)"
+  cp -R "$APP" "$STAGE/"
+  ln -s /Applications "$STAGE/Applications"
+  rm -f "$DMG"
+  hdiutil create -volname "Bifrost Link" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" >/dev/null
+  rm -rf "$STAGE"
+  echo "Built $DMG"
+fi
 if [[ "$1" == "--install" ]]; then
   rm -rf "/Applications/Bifrost Link.app"
   cp -R "$APP" /Applications/

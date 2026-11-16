@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install bundled tools
+        run: |
+          brew install rom-tools
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;36.0.0" >/dev/null
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Work out the version
+        id: version
+        run: |
+          BASE="$(cat VERSION 2>/dev/null || echo 1.0)"
+          VERSION="$BASE.${{ github.run_number }}"
+          PREVIOUS="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+
+      - name: Build the app and disk image
+        env:
+          BIFROST_VERSION: ${{ steps.version.outputs.version }}
+          BIFROST_BUILD: ${{ github.run_number }}
+        run: ./scripts/build-app.sh --dmg
+
+      - name: Write the changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+        run: |
+          RANGE="${PREVIOUS:+$PREVIOUS..}HEAD"
+          {
+            echo "## Bifrost Link $VERSION"
+            echo
+            echo "### Changes"
+            git log $RANGE --no-merges --pretty='- %s (%h)'
+            echo
+            if [ -n "$PREVIOUS" ]; then
+              echo "**Full diff:** https://github.com/${{ github.repository }}/compare/$PREVIOUS...v$VERSION"
+              echo
+            fi
+            echo "### Install"
+            echo "Open the DMG and drag **Bifrost Link** into Applications. The app is not notarized, so the first time right-click it and choose **Open**, or run \`xattr -dr com.apple.quarantine \"/Applications/Bifrost Link.app\"\`."
+            echo
+            echo "Requires a Mac with Apple silicon and macOS 14 or later."
+          } > CHANGELOG-release.md
+          cat CHANGELOG-release.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" "build/Bifrost-Link-$VERSION.dmg" \
+            --title "Bifrost Link $VERSION" \
+            --notes-file CHANGELOG-release.md \
+            --target "$GITHUB_SHA"
