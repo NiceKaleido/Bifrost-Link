@@ -7,6 +7,11 @@ struct ImportItem: Identifiable {
     let size: Int64
     let candidates: [String]
     var system: String
+    var patch: URL?
+    var outputName = ""
+    var remoteSource: String?
+
+    var displayName: String { patch == nil ? url.lastPathComponent : outputName }
 }
 
 struct UnsortedRom: Identifiable, Hashable {
@@ -52,6 +57,9 @@ struct BiosStatus: Identifiable {
 final class EmulationHub: ObservableObject {
     @Published private(set) var folders: [String: RomFolder] = [:]
     @Published var importItems: [ImportItem] = []
+    @Published var unpairedPatches: [URL] = []
+    @Published var importOriginals = false
+    @Published var pairing: String?
     @Published private(set) var unsorted: [UnsortedRom] = []
     @Published private(set) var space: [SystemSpace] = []
     @Published private(set) var orphanMedia: [OrphanMedia] = []
@@ -78,6 +86,8 @@ final class EmulationHub: ObservableObject {
         "chdman": [Bundle.main.resourceURL?.appendingPathComponent("tools/chdman").path, "/opt/homebrew/bin/chdman", "/usr/local/bin/chdman"]
             .compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) },
         "dolphin-tool": ["/opt/homebrew/bin/dolphin-tool", "/usr/local/bin/dolphin-tool"].first { FileManager.default.isExecutableFile(atPath: $0) },
+        "xdelta3": [Bundle.main.resourceURL?.appendingPathComponent("tools/xdelta3").path, "/opt/homebrew/bin/xdelta3", "/usr/local/bin/xdelta3"]
+            .compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) },
     ]
 
     func reset(serial: String?) {
@@ -118,31 +128,133 @@ final class EmulationHub: ObservableObject {
     func prepareImport(_ urls: [URL]) {
         Task {
             if folders.isEmpty { await refreshFolders() }
-            var items: [ImportItem] = []
+            var roms: [ImportItem] = []
+            var patches: [URL] = []
             for url in urls {
                 var isDir: ObjCBool = false
                 guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-                let (candidates, _) = Systems.detect(localFile: url)
-                let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                let preferred = candidates.first { folders[$0] != nil } ?? "unsorted"
-                items.append(ImportItem(url: url, size: size, candidates: candidates, system: preferred))
+                if RomPatcher.isPatch(url) {
+                    patches.append(url)
+                } else {
+                    roms.append(romItem(url))
+                }
             }
-            importItems = items
+            var patched: [ImportItem] = []
+            var unpaired: [URL] = []
+            for patch in patches {
+                let base = patch.deletingPathExtension().lastPathComponent.lowercased()
+                let match = roms.first { base == $0.url.deletingPathExtension().lastPathComponent.lowercased() }
+                    ?? roms.first { base.hasPrefix($0.url.deletingPathExtension().lastPathComponent.lowercased()) }
+                    ?? (roms.count == 1 ? roms[0] : nil)
+                if let match {
+                    patched.append(patchItem(patch, rom: match))
+                } else {
+                    unpaired.append(patch)
+                }
+            }
+            let usedRoms = Set(patched.map(\.url))
+            importOriginals = false
+            importItems = patched + roms.filter { !usedRoms.contains($0.url) } + roms.filter { usedRoms.contains($0.url) }.map { var original = $0; original.outputName = "original"; return original }
+            unpairedPatches = unpaired
+            if importItems.isEmpty && unpaired.isEmpty {
+                toast?("questionmark.folder", "Drop ROM or patch files here, folders aren’t imported")
+            }
         }
+    }
+
+    private func romItem(_ url: URL) -> ImportItem {
+        let (candidates, _) = Systems.detect(localFile: url)
+        let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        let preferred = candidates.first { folders[$0] != nil } ?? "unsorted"
+        return ImportItem(url: url, size: size, candidates: candidates, system: preferred)
+    }
+
+    private func patchItem(_ patch: URL, rom: ImportItem) -> ImportItem {
+        var item = ImportItem(url: rom.url, size: rom.size, candidates: rom.candidates, system: rom.system)
+        item.patch = patch
+        item.outputName = RomPatcher.outputName(patch: patch, rom: rom.url)
+        item.remoteSource = rom.remoteSource
+        return item
+    }
+
+    var isOriginalOnlyForPatch: (ImportItem) -> Bool { { $0.patch == nil && $0.outputName == "original" } }
+
+    func pair(_ patch: URL, withLocal rom: URL) {
+        unpairedPatches.removeAll { $0 == patch }
+        importItems.insert(patchItem(patch, rom: romItem(rom)), at: 0)
+    }
+
+    func pair(_ patch: URL, withRemote path: String) async {
+        guard let serial else { return }
+        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("bifrost-patch-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let local = staging.appendingPathComponent((path as NSString).lastPathComponent)
+        pairing = "Copying \(local.lastPathComponent) from the Thor…"
+        let result = try? await ADB.shared.run(["pull", path, local.path], serial: serial, timeout: 0)
+        pairing = nil
+        guard result?.ok == true else {
+            toast?("exclamationmark.triangle", "Couldn’t copy \(local.lastPathComponent) from the Thor")
+            return
+        }
+        var rom = romItem(local)
+        let folder = (path as NSString).deletingLastPathComponent
+        if let system = folders.first(where: { $0.value.path == folder })?.key { rom.system = system }
+        rom.remoteSource = path
+        unpairedPatches.removeAll { $0 == patch }
+        importItems.insert(patchItem(patch, rom: rom), at: 0)
+    }
+
+    func thorRoms() async -> [String] {
+        guard let serial else { return [] }
+        if folders.isEmpty { await refreshFolders() }
+        let paths = folders.values.map { ADB.quote($0.path) }.joined(separator: " ")
+        guard !paths.isEmpty else { return [] }
+        let out = (try? await ADB.shared.shell("find \(paths) -maxdepth 2 -type f 2>/dev/null", serial: serial, timeout: 30)) ?? ""
+        return out.split(separator: "\n").map(String.init).filter { !$0.hasSuffix(".xml") && !$0.hasSuffix(".txt") && !$0.contains("/.") }.sorted()
     }
 
     func performImport() async {
         guard let serial, let files else { return }
-        let items = importItems
+        var items = importItems.filter { importOriginals || !isOriginalOnlyForPatch($0) }
         importItems = []
-        let grouped = Dictionary(grouping: items, by: \.system)
-        for (system, group) in grouped {
-            let target = targetFolder(for: system)
+        unpairedPatches = []
+        var failures: [String] = []
+        var patchedCount = 0
+        for (index, item) in items.enumerated() {
+            guard let patch = item.patch else { continue }
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("bifrost-patched-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let output = folder.appendingPathComponent(item.outputName.isEmpty ? RomPatcher.outputName(patch: patch, rom: item.url) : item.outputName)
+            do {
+                try await RomPatcher.apply(patch: patch, to: item.url, output: output)
+                var result = ImportItem(url: output, size: FileService.localSize(output), candidates: item.candidates, system: item.system)
+                result.remoteSource = item.remoteSource
+                items[index] = result
+                patchedCount += 1
+                Log.write("patched \(item.url.lastPathComponent) with \(patch.lastPathComponent) -> \(output.lastPathComponent)")
+            } catch {
+                failures.append("\(patch.lastPathComponent): \(error.localizedDescription)")
+                Log.write("patch failed: \(patch.lastPathComponent) on \(item.url.lastPathComponent): \(error.localizedDescription)")
+                items[index] = ImportItem(url: item.url, size: 0, candidates: [], system: "")
+            }
+        }
+        items.removeAll { $0.system.isEmpty }
+        if !failures.isEmpty {
+            toast?("exclamationmark.triangle", failures.count == 1 ? failures[0] : "\(failures.count) patches couldn’t be applied: \(failures[0])")
+        }
+        guard !items.isEmpty else { return }
+        let grouped = Dictionary(grouping: items) { item in
+            item.remoteSource.map { ($0 as NSString).deletingLastPathComponent } ?? targetFolder(for: item.system)
+        }
+        for (target, group) in grouped {
             _ = try? await ADB.shared.shell("mkdir -p \(ADB.quote(target))", serial: serial, timeout: 10)
             files.upload(group.map(\.url), to: target)
         }
         Log.write("rom import: \(items.count) file(s) into \(grouped.keys.sorted())")
-        toast?("square.and.arrow.down.on.square", items.count == 1 ? "Sending \(items[0].url.lastPathComponent) to \(Systems.name(for: items[0].system)). Rescan in Cocoon to see it" : "Sending \(items.count) ROMs to their systems. Rescan in Cocoon to see them")
+        if failures.isEmpty {
+            let what = patchedCount > 0 ? (items.count == 1 ? "patched " : "\(patchedCount) patched, ") : ""
+            toast?("square.and.arrow.down.on.square", items.count == 1 ? "Sending \(what)\(items[0].url.lastPathComponent) to \(Systems.name(for: items[0].system)). Rescan in Cocoon to see it" : "Sending \(items.count) ROMs (\(what)to their systems). Rescan in Cocoon to see them".replacingOccurrences(of: " (to their", with: " to their").replacingOccurrences(of: ", to their systems)", with: " included) to their systems"))
+        }
         await refreshFolders()
     }
 
@@ -368,6 +480,8 @@ struct GamelistEntry {
     let hero: String
     let playtime: Int
     let media: [String]
+    var playcount = 0
+    var lastPlayed = ""
 }
 
 enum GamelistParser {
@@ -383,7 +497,9 @@ enum GamelistParser {
                 boxart: tag("cocoon:boxartlocal", in: body),
                 hero: tag("cocoon:herolocal", in: body),
                 playtime: Int(tag("cocoon:playtime", in: body)) ?? 0,
-                media: mediaFiles(in: body)))
+                media: mediaFiles(in: body),
+                playcount: Int(tag("playcount", in: body)) ?? 0,
+                lastPlayed: tag("lastplayed", in: body)))
             searchRange = end.upperBound..<xml.endIndex
         }
         return entries

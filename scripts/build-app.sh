@@ -60,10 +60,14 @@ if [[ -x "$AAPT2" ]]; then
   cp "$AAPT2" "$APP/Contents/Resources/tools/aapt2"
 fi
 
-CHDMAN="$(command -v chdman || true)"
-if [[ -n "$CHDMAN" ]]; then
-  mkdir -p "$APP/Contents/Resources/tools"
-  bundle_tool "$CHDMAN" "$APP/Contents/Resources/tools"
+for tool in chdman xdelta3; do
+  TOOL_PATH="$(command -v $tool || true)"
+  if [[ -n "$TOOL_PATH" ]]; then
+    mkdir -p "$APP/Contents/Resources/tools"
+    bundle_tool "$TOOL_PATH" "$APP/Contents/Resources/tools"
+  fi
+done
+if [[ -d "$APP/Contents/Resources/tools" ]]; then
   for f in "$APP/Contents/Resources/tools"/*; do codesign --force --sign - "$f" >/dev/null 2>&1; done
 fi
 

@@ -1,211 +1,366 @@
 # Bifrost Link
 
-A native macOS app for docking an AYN Thor to a Mac. It does the following:
-- mirrors both screens in one window
-- passes keyboard, mouse, trackpad and controllers through
-- gives each screen its own volume
-- includes a file browser with storage analysis
-- takes screenshots, records and keeps an instant replay
-- keeps the Thor running, with both of its screens dark, while it's docked
+**Dock your AYN Thor to your Mac.** Plug the Thor in with a USB cable and both of its screens show up in a window on your Mac. Play with your Mac's keyboard, mouse or any controller, hear the sound through your Mac, and keep using the Thor's own apps, emulators and launcher as if it were a small console under your desk.
 
-Everything runs locally over USB (adb). Nothing is uploaded anywhere.
+While it's docked, Bifrost also helps you look after your Thor:
+- copy files back and forth
+- sort new games into the right folders
+- back up your saves
+- clean up space
+- install and update native game ports
 
-## Build & install
+Everything happens directly over the USB cable. Nothing is uploaded anywhere, and nothing stays installed on your Thor.
+
+---
+
+## Contents
+
+1. [What you need](#what-you-need)
+2. [Install](#install)
+3. [Your first link](#your-first-link)
+4. [The window](#the-window)
+5. [Playing](#playing): keyboard, mouse, controllers
+6. [Sound](#sound)
+7. [Screenshots, recordings and clips](#screenshots-recordings-and-clips)
+8. [The side panel](#the-side-panel): Files, Library, Saves, Cleanup
+9. [Ports](#ports): native games for your Thor
+10. [Play Time](#play-time)
+11. [Docking: lid, screens, power and charging](#docking-lid-screens-power-and-charging)
+12. [Settings at a glance](#settings-at-a-glance)
+13. [Keyboard shortcuts](#keyboard-shortcuts)
+14. [Troubleshooting](#troubleshooting)
+15. [For developers](#for-developers)
+
+---
+
+## What you need
+
+- A Mac with Apple silicon (M1 or newer) and macOS 14 Sonoma or later.
+- An AYN Thor. Other Android devices mostly work too, but the docking features are made for the Thor.
+- A USB-C cable that carries data, not just power.
+- **USB debugging** turned on on the Thor (explained below).
+
+## Install
+
+1. Download the latest `Bifrost-Link-<version>.dmg` from the [Releases page](https://github.com/NiceKaleido/Bifrost-Link/releases).
+2. Open it and drag **Bifrost Link** into your Applications folder.
+3. The first time, **right-click** Bifrost Link in Applications and choose **Open**, then confirm. This is needed once because the app isn't notarized by Apple. If macOS still refuses, run this in Terminal:
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Bifrost Link.app"
+   ```
+
+Everything Bifrost needs, including the tools for talking to Android, is inside the app. There's nothing else to install.
+
+## Your first link
+
+1. **Turn on USB debugging on the Thor** (one time only):
+   1. Open **Settings ▸ About device** and tap **Build number** seven times until it says you're a developer.
+   2. Go to **Settings ▸ System ▸ Developer options** and turn on **USB debugging**.
+2. **Connect the Thor** to your Mac with the USB cable and open Bifrost Link.
+3. On the Thor, a dialog asks **"Allow USB debugging?"**. Tick **Always allow from this computer** and tap **Allow**.
+
+That's it. Bifrost links on its own and both screens appear. From now on, plugging in the cable is all it takes.
+
+While linked, the Thor's own screens turn dark to save power and keep the picture only on your Mac. Pull the cable, or choose **Device ▸ Unlink**, and the Thor goes back to normal.
+
+## The window
+
+The toolbar, from left to right:
+
+| Button | What it does |
+| --- | --- |
+| Status pill | Shows the Thor, its battery, and the game you're playing |
+| Layout | How the two screens are arranged (see below), plus per-game layouts, controls and separate windows |
+| Back · Home · Recents · Close App | Android's navigation buttons. Close App quits whatever is in front on the screen you clicked last; your launcher is never closed |
+| Mute · Volume | Sound on the Mac, with a slider per screen |
+| Screenshot · Replay · Record | Capture what's on screen |
+| More (⋯) | Picture options, recording mode, instant replay, pause mirroring, Thor screens on/off, rotate, notifications, and Ports, Play Time and Controls |
+| Full Screen · Sidebar | Full screen, and the side panel with Files, Library, Ports, Play Time, Saves and Cleanup |
+
+**Layouts.** Choose them in the Layout menu or with ⌘1 to ⌘5:
+- **Stacked:** top screen above bottom screen, like the Thor itself.
+- **Side by Side:** the two screens next to each other.
+- **Picture in Picture:** one screen big, the other small on top of it. ⌘-drag the small one to move it, ⌘-drag a corner to resize it.
+- **Top Only** and **Bottom Only:** a single screen.
+
+⌘0 swaps the screens. ⌥⌘0 resizes the window to fit the layout.
+
+**Remember a layout per game.** While a game is running, the Layout menu offers "Remember Layout for This Game" and "…for All <System> Games". The next time you start that game, its layout comes back by itself. This works for Android apps and games too ("Remember Layout for This App").
+
+**A screen in its own window.** Layout menu ▸ "Open Bottom Screen in Its Own Window" (or the top screen) gives that screen a window of its own. You could, for example, put the top screen full screen on your TV and keep the bottom screen on the MacBook. "Move Its Window to" sends it to any connected display, optionally straight into full screen. Close that window, or choose "Bring the … Back", to put the screen back. Bifrost remembers this for the next time you dock.
+
+**Full screen** (⌘F) shows the screens edge to edge on black, without the toolbar. Move the pointer to the top edge to bring the controls back. Pop-up messages stay hidden in full screen; you can change that in Settings ▸ Picture.
+
+**Picture options** (More menu):
+- **Cinema mode** (⌥⌘C): a soft glow of the game's colors around the screens, like ambient TV lighting. Black bars and loading screens are ignored.
+- **Sharper picture** (⌥⌘U, on by default): upscales the image to your Mac's display.
+- **Stats overlay** (⌥⌘I): frame rate, bitrate and delay, if you're curious.
+
+## Playing
+
+**Touch.** Click and drag to touch the Thor's screen. A trackpad pinch zooms with two fingers. Right click is Back, middle click is Home.
+
+**Typing.** Your Mac keyboard types into whatever screen you clicked last, in your own keyboard layout. ⌘C and ⌘V copy and paste between the Mac and the Thor.
+
+Cocoon's on-screen keyboard is made for controllers. It would turn Enter into a "q" and steal the arrow keys, so Bifrost switches it off while docked and back on when you unplug. If you'd rather type with a controller on Cocoon's keyboard, turn off "Type with the Mac keyboard" in Settings ▸ Input.
+
+**Controllers.** Any controller connected to your Mac (Xbox, PlayStation, Switch Pro, 8BitDo…) shows up on the Thor as an **Odin controller**, the same kind as the Thor's built-in controls. Your existing button setups in every emulator just work. Bifrost also follows the Thor's Xbox/Nintendo button-style tile: in Nintendo style the button in the same position does the same thing. Want rumble? Settings ▸ Input ▸ "Show up on the Thor as" ▸ Xbox Wireless Controller.
+
+**Controls per game.** Device ▸ Controls… lets you:
+- remap every button
+- swap or invert the sticks
+- set the dead zone
+
+Choose who the settings are for: only the game that's running, all games of its system, or every game. When a game starts, its own settings are used automatically. While the window is open, a dot lights up next to each button as you press it, so you can see what's what.
+
+**No controller? Use the keyboard and mouse.** Device ▸ Keyboard Plays as Controller (⌃⌘K) turns your keyboard into a controller:
+
+| Keys | Controller |
+| --- | --- |
+| W A S D | Left stick |
+| Arrow keys | D-pad |
+| K · L · J · I | A · B · X · Y |
+| Q · E | Shoulder buttons |
+| 1 · 3 | Triggers |
+| R · T | Stick clicks |
+| Return · Tab | Start · Select |
+
+Every key can be changed in Controls… Click the screen to hand the mouse to the game: the pointer disappears, moving the mouse turns the camera, left click is the right trigger and right click the left trigger. **Esc** gives the pointer back, and ⌃⌘K switches the keyboard back to typing.
+
+**Sending files.** Drop files onto a screen to put them in the Thor's Download folder. Drop an `.apk` and it gets installed.
+
+## Sound
+
+The Thor's sound plays on your Mac, and the Thor itself stays quiet.
+- **Mute** (⇧⌘M) silences the Mac without sending the sound back to the Thor.
+- **Volume** has three sliders: one for everything, one for the top screen and one for the bottom screen. That's handy when a game plays on top and a video on the bottom.
+- While docked, the Thor's own volume is held at full, so only Bifrost's sliders matter. Your usual Thor volume comes back when you unplug.
+- If a game's sound ends up on the Thor's speaker anyway, Bifrost notices within a couple of seconds and brings it back.
+- Some older games and emulators don't allow their sound to be captured per app. If one stays silent on the Mac, turn off **Separate audio per screen** in the Volume popover; then all of the Thor's sound is captured at once.
+- **"Also play on the Thor's speakers"** in the Volume popover plays the sound on both.
+
+## Screenshots, recordings and clips
+
+| | How |
+| --- | --- |
+| **Screenshot** | ⇧⌘S saves a picture of each screen and copies it to the clipboard |
+| **Record** | ⇧⌘R starts and stops a recording. Choose in the record button's menu between **Separate screens** (one video per screen, original quality) and **Window layout** (one video of both screens exactly as arranged in your window) |
+| **Instant replay** | Turn it on in the More menu and choose 30 seconds, 1 minute or 2 minutes. When something great happens, press ⌥⌘S to save the last moments, with sound |
+| **Clips** | After a replay or recording, click **Edit** in the message, or use Device ▸ Make a Clip… (⌥⌘E). Trim the start and end, then export a share-ready MP4 (with or without sound) or a GIF |
+
+When a game is running, captures are named after the game and sorted into a folder per game. Choose the folders in Settings ▸ Capture.
+
+## The side panel
+
+⇧⌘F or the sidebar button opens a panel next to the screens. The column on its left lists the sections by name, grouped into **Files**; **Library**, **Ports** and **Play Time** for your games; and **Saves** and **Cleanup** to look after them. A number on Ports means updates are waiting. Each section starts with a short explanation, and its main action is always in the top-right corner: Rescan, Refresh, Back Up Now or Measure. Drag the panel's left edge to make it wider.
+
+At the bottom of the panel, the **Activity** strip shows everything that's running, such as file copies, game shrinking and port installs, each with its own progress and a Cancel button.
+
+### Files
+Browse the Thor's internal storage and SD card.
+- **Copy to the Thor:** drag files in from Finder, or use Upload….
+- **Go to** (next to the path) jumps to Downloads, Roms, screenshots and other common folders.
+- **Select files** to download, rename or delete them.
+- **Sizes** shows how big each folder is, biggest first.
+- **Find Largest Files** (⋯ menu) helps when space runs low.
+- Right-click a folder and choose **Back Up With Saves** to include it in your save backups.
+
+### Library
+Everything about your games. It checks itself a few seconds after you link.
+- **Import games:** drop ROMs or disc images here. Bifrost recognizes the system (it even reads disc headers, so a PSP image isn't mistaken for PlayStation) and puts each game into the right `Roms/<system>` folder. With many files, "Set all to" picks one system for all of them.
+- **Patches:** drop a translation or ROM-hack patch (`.ips`, `.ups`, `.bps`, `.xdelta`) together with the game, or on its own and pick the game from your Mac or your Thor. The patched game goes onto the Thor under the patch's name; your original stays as it is. If the patch belongs to a different version of the game, Bifrost tells you instead of making a broken copy.
+- **Stray games** lying outside your `Roms` folders can be moved into place.
+- **Rescan** (top right) checks everything again; hover over it to see when the library was last checked.
+- **Space by system** shows which consoles take up the most room.
+- **BIOS check** shows which systems are missing BIOS files.
+- **Leftover artwork:** removes Cocoon artwork for games you deleted. Cocoon's game lists are backed up first.
+- **Shrink games:**
+  - Disc images (PS1, PS2, PSP, Dreamcast, Saturn) are converted to CHD.
+  - Cartridge games (Game Boy, GBA, SNES, N64, Mega Drive and more) are zipped.
+  - Each game is copied to the Mac, shrunk and checked there, then sent back. Your originals are only removed once you confirm, and playlists and Cocoon entries are updated to the new file.
+- **App updates:** sideloaded emulators and apps are checked against their GitHub releases. Native ports from the Recompa catalog are left out here; they get their updates in the **Ports** section.
+
+### Saves
+Backups of your emulator saves on your Mac. They cover:
+- RetroArch, PPSSPP, Dolphin, DuckStation, Eden, Azahar, melonDS and ARMSX2
+- each emulator's settings (as a separate item)
+- any folder you add yourself
+
+How it works:
+- **Automatic backup** once a day when you link, or **Back Up Now** at the top.
+- **What gets backed up:** tick or untick each emulator. **Add Folder…** adds any folder on the Thor.
+- **Keep the last 3 to 50 backups**, or all of them. **Pin** a backup to keep it forever.
+- **Open a backup** to see every saved game and state with its date and size.
+- **Restore** one emulator, only its settings, or everything. Your current saves are backed up first ("Before restore"), so a restore can always be undone.
+
+Some apps keep their saves in private storage that can't be read over USB; Bifrost tells you which ones.
+
+### Cleanup
+Finds what piles up in emulators over time: shader caches, logs, dumps, old save states. It shows the size per emulator. Saves and states are backed up before they're removed, and mods and texture packs are never touched.
+
+## Ports
+
+The **Ports** tab in the side panel (⌥⌘R, or More ▸ Ports in the toolbar).
+
+Native ports are PC, console and handheld games rebuilt to run directly on Android, without an emulator. Bifrost shows the community catalog from [Recompa](https://recompa.app), which lists hundreds of them.
+
+- **Browse** all ports, the ones **On Thor**, or **Updates**. Search, and use **Filters** for **Works on the Thor** (rated by other Thor owners), **Dual screen**, type or original platform. Every port shows its Thor rating: great, playable or broken. Click a port for its details, screenshots and versions.
+- **Install** with one click. The download comes straight from the port's GitHub page and is checked against the catalog before anything is installed.
+- **Already installed?** Bifrost recognizes the exact version on your Thor and tells you when there's an update. **Update All** updates everything at once, and older versions are available if a new one misbehaves.
+- **Your game files:** most ports need files from your own copy of the game. **Find on Thor** looks through your `Roms` folders for a file that matches exactly. **Choose on Mac…** checks a file from your Mac. Bifrost then puts the file where the port expects it and shows the port's own instructions. Game files are never downloaded from the internet.
+
+After you link, Bifrost checks for port updates and lets you know when some are ready.
+
+## Play Time
+
+The **Play Time** tab in the side panel (⇧⌘T) shows how much you play:
+- total hours, games played this week and your longest session
+- your 10 most played games
+- hours per system
+- a 30-day chart
+
+It combines the play time Cocoon records on the Thor with the sessions Bifrost records while you're docked, without counting anything twice.
+
+## Docking: lid, screens, power and charging
+
+Bifrost is made so the Thor can sit closed next to your Mac. You'll find these options in Settings ▸ Docking.
+
+- **The screens go dark while linked.** Android keeps running, so the picture and sound on your Mac don't stop. ⇧⌘P turns the Thor's screens back on if you want to see them.
+- **Close the lid** and the Thor keeps running.
+- **Open the lid** and its screens come back on.
+- **The power button** turns the Thor's screens on and off instead of disconnecting.
+- **Charging separation:** while docked, the Thor runs straight from USB power and doesn't charge its battery, which is kinder to the battery. Your usual setting comes back when you unplug.
+- **Pause mirroring** (⌃⌘P) stops the picture and gives the screens and sound back to the Thor, while Files, Library and controllers keep working. Resume when you want the picture back.
+- **Unplugging** puts everything back the way it was: the screens, the volume, the keyboard, charging, Wi-Fi and Bluetooth. This happens on the Thor itself, so it works even if you just pull the cable. If the lid is closed, the Thor waits 30 seconds before it sleeps; open it in that time and it simply stays awake.
+- **Sleep Manager** (optional): if you use the Sleep Manager app, Bifrost can pause it while docked so it doesn't switch Wi-Fi off, and restarts it when you unplug.
+
+## Settings at a glance
+
+| Tab | What's there |
+| --- | --- |
+| **General** | Linking automatically when the Thor is plugged in, the folder for downloaded files |
+| **Picture** | Sharper picture, cinema mode, stats, full screen controls and pop-ups, codec, quality, frame rate and resolution |
+| **Capture** | Folders for screenshots and recordings, instant replay length |
+| **Docking** | Dark screens, lid and power button, charging separation, Sleep Manager |
+| **Input** | Controllers, rumble, mouse pointer, typing with the Mac keyboard, Edit Controls… |
+| **Emulation** | Save backup folder and how many to keep, port updates, shrinking |
+
+Video settings (quality, codec, frame rate) apply on the next link. Device ▸ Relink applies them right away.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘1 – ⌘5 | Stacked · Side by Side · Picture in Picture · Top Only · Bottom Only |
+| ⌘0 | Swap screens |
+| ⌥⌘0 | Fit the window to the screens |
+| ⌘F | Full screen |
+| ⌥⌘C · ⌥⌘U · ⌥⌘I | Cinema mode · sharper picture · stats overlay |
+| ⌥⌘+ · ⌥⌘− | Bigger / smaller picture-in-picture screen |
+| ⌘⌫ · ⇧⌘H · ⇧⌘A | Back · Home · Recent apps |
+| ⇧⌘N · ⇧⌘O | Notifications · Rotate |
+| ⌥⌘↑ · ⌥⌘↓ | Thor volume up / down |
+| ⌃⌘W | Close the app in front |
+| ⇧⌘M | Mute |
+| ⇧⌘P | Thor screens on / off |
+| ⌃⌘P | Pause / resume mirroring |
+| ⇧⌘S · ⇧⌘R · ⌥⌘S | Screenshot · Record · Save replay |
+| ⌥⌘E | Make a clip |
+| ⇧⌘F | Side panel |
+| ⌃⌘K | Keyboard plays as controller |
+| ⌥⌘R · ⇧⌘T | Ports · Play Time |
+
+## Troubleshooting
+
+**Bifrost doesn't find the Thor.**
+- Check that USB debugging is on and that you allowed this Mac on the Thor.
+- Try another cable or port; some cables only charge.
+- If you also use Android tools on your Mac, run `adb kill-server` in Terminal and reopen Bifrost.
+
+**A game is silent on the Mac.** It probably doesn't allow its sound to be captured per app. Turn off **Separate audio per screen** in the Volume popover.
+
+**PPSSPP shows the game on the bottom screen.** That's PPSSPP's own Settings ▸ Graphics ▸ "External display" option. The Thor reports its bottom screen as an external display, so PPSSPP moves the game there. Turn the option off in PPSSPP.
+
+**The picture stutters while copying big files.** Files are copied one at a time to keep the picture smooth. If it still stutters, lower the quality in Settings ▸ Picture.
+
+**A port won't update.** If it says the installed version comes from a different author or is newer, Android needs the old one removed first. Bifrost offers "Back Up, Uninstall & Install". Data that the app keeps privately is lost in that case.
+
+**A patch says "different version of the game".** The patch was made for another region or revision. Check the patch's notes for the exact version it needs.
+
+**Logs.** If something goes wrong, `~/Library/Logs/Bifrost Link/bifrost.log` records what Bifrost did. Attach it when you report a problem.
+
+---
+
+## For developers
+
+### Build
 
 ```sh
 ./scripts/build-app.sh            # builds build/Bifrost Link.app
 ./scripts/build-app.sh --install  # also copies it to /Applications
+./scripts/build-app.sh --dmg      # also makes a disk image (set BIFROST_VERSION)
 ```
 
-Requirements:
-- Xcode Command Line Tools (Swift 5.9+)
-- adb (`brew install android-platform-tools` or the Android command-line tools)
-- to rebuild the device server: JDK 17 and the Android build tools / platform 36 (in `/opt/homebrew/share/android-commandlinetools`)
+What you need to build:
+- Xcode Command Line Tools (Swift 5.9 or newer)
+- `adb` and the Android build tools (`/opt/homebrew/share/android-commandlinetools`)
+- To bundle the optional tools: `brew install rom-tools xdelta`, which provides `chdman` and `xdelta3`
+- To rebuild the device server: JDK 17
 
-The build bundles `adb`, the patched server and the icon (`Resources/logo.png`) into the app. On launch the app prefers a system adb if one is installed.
+The build bundles `adb`, `aapt2`, `chdman`, `xdelta3` and the device server into the app.
 
-## Releases
+### Releases
 
-Every push to `main` builds a release on GitHub (`.github/workflows/release.yml`):
-1. A macOS runner installs the tools Bifrost bundles (`chdman` from Homebrew's `rom-tools`, plus `adb` and `aapt2` from the Android SDK), then runs `./scripts/build-app.sh --dmg`.
-2. The version is the base in `VERSION` plus the workflow run number, for example `1.0.12`. Edit `VERSION` for a bigger jump.
-3. The release notes list every commit since the previous release tag.
-4. The `Bifrost-Link-<version>.dmg` is published as release `v<version>`.
+Every push to `main` that touches more than Markdown builds a release with GitHub Actions (`.github/workflows/release.yml`):
+1. The version is `VERSION` plus the run number.
+2. The release notes list the commits since the previous release.
+3. A signed-ad-hoc, Apple-silicon DMG is attached.
 
-Pushes that only touch Markdown files or `.gitignore` don't create a release. Releases can also be started by hand from the Actions tab.
+The server jar is used as committed: after changing `server/bifrost.patch`, run `./server/build.sh` and commit `Resources/bifrost-server.jar`.
 
-The app is ad-hoc signed, not notarized, so on another Mac it has to be opened once with right-click ▸ Open. The release notes say so. The build is Apple silicon only. The server jar (`Resources/bifrost-server.jar`) is used as committed, so run `./server/build.sh` and commit the jar after changing `server/bifrost.patch`.
-
-To build the disk image locally: `BIFROST_VERSION=1.0.0 ./scripts/build-app.sh --dmg`.
-
-## Using it
-
-Plug the Thor in with USB debugging on. Bifrost links automatically.
-
-### Screens & window
-
-| Action | How |
-| --- | --- |
-| Toolbar | From the left: status pill · layout · Back, Home, Recents, Close App · Mute, Volume · Screenshot, Replay, Record · More (picture options, recording mode, instant replay, pause mirroring, Thor screens, rotate, notifications) · Full Screen · Sidebar |
-| Close App | ⌃⌘W or the toolbar button force-closes the app in front on the screen you last clicked (the home launcher is never closed) |
-| Layouts | The layout button in the toolbar (it shows the current layout and also holds Swap and the game/app layout options), or ⌘1 Stacked · ⌘2 Side by Side · ⌘3 Picture in Picture · ⌘4 Top Only · ⌘5 Bottom Only |
-| Swap screens | ⌘0 or the ⇅ button |
-| Picture in picture | ⌘-drag the small screen anywhere to move it; ⌘-drag one of its corners to resize it. ⌥⌘+ / ⌥⌘− also resize it, and View Layout ▸ Overlay Opacity sets its opacity |
-| Full screen | ⌘F (enter and leave) or the toolbar button: black background, edge to edge, no toolbar. Pop-up messages (screenshot saved, backups, transfers…) are hidden while in full screen; turn this off in Settings ▸ Picture with “Hide pop-up messages in full screen” |
-| Cinema mode | ⌥⌘C: a soft glow of each screen's live colors in a dark room, like YouTube's ambient mode. Black bars around 4:3 or letterboxed games are ignored, and fully black frames (loading screens) keep the previous glow |
-| MetalFX upscaling | ⌥⌘U: upscales the picture to the window's real pixel size (on by default) |
-| Stats overlay | ⌥⌘I: fps, bitrate, decode→display latency, codec/resolution and audio buffer per screen |
-| Fit window | ⌥⌘0 resizes the window to the layout's proportions. It never happens automatically |
-
-### Input
-
-| Action | How |
-| --- | --- |
-| Touch | Click / drag. Trackpad pinch = two-finger zoom |
-| Back / Home / Recents | Right click / middle click, toolbar buttons, ⌘⌫ / ⇧⌘H / ⇧⌘A |
-| Keyboard | Goes to the screen you clicked last. Your Mac keyboard layout is respected |
-| Clipboard | ⌘C copies from the Thor, ⌘V pastes into it |
-| Game controllers | Controllers connected to the Mac appear on the Thor as an **Odin Controller** by default, the same identity as the Thor's built-in controls, so existing app mappings just work. Face buttons follow the Thor's own controller style (the Xbox / Nintendo tile, `flip_button_layout`): in Nintendo style A↔B and X↔Y are swapped so the button in the same position does the same thing, in Xbox style they pass straight through. Bifrost checks the setting every few seconds, so switching the tile applies right away. Settings ▸ Input can switch to Xbox Wireless Controller, which adds rumble on the Mac controller |
-| Drop files on a screen | Sends them to `/sdcard/Download`; `.apk` files get installed |
-
-### Capture
-
-Folders are set in Settings ▸ Capture. Each has Choose…, Open in Finder and Reset.
-
-| Action | How |
-| --- | --- |
-| Screenshot | ⇧⌘S: one PNG per visible screen. A single screenshot is also copied to the clipboard |
-| Record | ⇧⌘R. The menu on the record button chooses the mode: **Separate screens** writes one `.mov` per screen with the Thor's original H.265 stream (no re-encoding). **Window layout** writes one HEVC video of both screens as arranged in the window (60 fps, up to 2560 px) |
-| Instant replay | Turn it on in Settings ▸ Capture and choose 30 s, 1 min or 2 min. ⌥⌘S saves the last moments of each screen with audio. It needs about 2 MB/s per screen of memory and asks the Thor for a keyframe every 2 s, which applies from the next link |
-
-### Files, Library, Saves, Cleanup
-
-⇧⌘F opens the side panel with four tabs. It sits below the toolbar next to the screens; drag its left edge to resize it (the width is remembered).
-
-**Activity.** Transfers and disc shrinking show up in one Activity strip at the bottom of the panel, on every tab. It shows overall progress ("2 of 5 · 1.2 GB of 3.4 GB"), can be collapsed, and has Cancel All and Clear. Files transfer one at a time, so the mirror stays smooth while you copy. Queued files can be removed before they start, and cancelling a running one removes the partial file. Disc shrinking waits for running transfers before it copies, so the two never compete for the USB connection. Progress bars never jump backwards.
-
-**Files.**
-- **Storage:** cards for Internal and SD card with free space (click a card to open it).
-- **Navigation:** quick places, a back button and a breadcrumb path bar.
-- **Actions:** Upload… and New Folder buttons, or drag files from Finder onto the list. Select files to get a bar at the bottom with Download, Download To…, Rename… and Delete…; double-click downloads a file or opens a folder.
-- **Sizes** (toggle): measures the current folder and sorts it biggest first, with bars (cached).
-- **Find Largest Files** (… menu): the 100 largest files on the current storage, ready to reveal, download or delete.
-
-**Library** and **Cleanup** check themselves a few seconds after the Thor links; Rescan refreshes them.
-
-**Library.**
-- **Import ROMs:** drop files or choose them. The picker lists the systems that have a `Roms/<system>` folder on your Thor (SD or internal), and the file goes into that folder. With several files, "Set all to" puts them all in one system at once. The most likely system is preselected from the file type and disc header; for CHD and ISO images Bifrost reads the disc header (with the bundled `chdman` for CHD), so a PSP CHD isn't mistaken for PS1.
-- **App updates:** sideloaded apps are checked against GitHub releases. ARMSX2 is preset; add `owner/repo` for any other app. Downloads are verified with the bundled `aapt2` (the package name must match) before `adb install -r` keeps your data.
-- **Stray ROMs** outside `Roms/` can be moved in place.
-- **Space by system:** bar chart; click a system to open its folder.
-- **BIOS check:** shows which systems have their BIOS.
-- **Leftover artwork:** Cocoon images and gamelist entries for games no longer on the Thor. An image is kept if Cocoon still references it, or if its name matches a ROM after removing edit or copy suffixes, region tags or disc numbers. `multi_disc_roms` counts as well. Gamelists are backed up to the Mac before entries are removed.
-- **Shrink games:** cartridge ROMs for systems whose emulators read ZIP directly (GB, GBC, GBA, NES, SNES, N64, Genesis/Mega Drive, Master System, Game Gear, PC Engine and a few more) are zipped on the Mac and checked with `unzip -t`; save files keep working because the name stays the same. Disc images: PS1, PS2, PSP, Dreamcast and Saturn images (ISO, CUE/BIN, GDI, also in subfolders) are listed with checkboxes. Select some or all and shrink them in one go. Each game is copied to the Mac, converted to CHD with the bundled `chdman`, verified, sent back and size-checked, each with its own row, status and Cancel button in the Activity strip, so you can add more games while others run and stop any single one. Cancelling a game leaves its original untouched and puts it back in the list. Multi-track games are read from their cue/gdi sheet, so all tracks travel together. Games that already have a CHD next to them are skipped. Originals stay until you remove them in one confirmation at the end, or automatically if you tick "Remove originals automatically". When an original is removed, `.m3u` playlists in the same folder and the Cocoon gamelist entry are pointed at the new `.chd` (the gamelist is backed up first). Failed games are skipped without stopping the batch, and the batch stops early if the Mac runs low on space.
-
-**Saves.**
-- Snapshots of all emulator saves and states, automatically once a day on link, or manually.
-- Restore per emulator.
-- Emulators that store saves privately (DuckStation) can't be read over USB; Bifrost says so instead of creating empty backups.
-
-**Cleanup.**
-- Caches, dumps, logs, per-game states and saves, measured per emulator.
-- Per-game items are backed up before removal; mods and texture packs are never offered.
-
-### Audio
-
-Mute (toolbar button, ⇧⌘M, or the switch in the Volume popover) works like moving the master slider to 0: the sound is silenced on the Mac but keeps being captured, so nothing falls back to the Thor's speaker. There is no separate "audio off" any more; while linked the Thor's sound always goes to the Mac.
-
-Audio is buffered adaptively: normally about 80 ms, up to 160 ms while USB is busy (for example during file transfers). After a dropout a short cushion is added so the sound doesn't crackle while the stream catches up.
-
-While docked, the Thor's media volume is held at 100%, so what you hear on the Mac depends only on Bifrost's sliders. Sound an app was already playing when capture started keeps the Thor's own volume level, so without this the level differed between apps you started fresh and apps that were already running. Your own Thor volume is saved and comes back when you pause mirroring, turn on "Also play on the Thor's speakers", unlink or unplug.
-
-If audio still ends up on the Thor's speaker, for example Dolphin starting its sound while captures are being swapped, Bifrost notices within about two seconds and restarts that capture cleanly, which is what turning "Separate audio per screen" off and on again used to do by hand.
-
-The audio popover has three sliders:
-- **Both Screens:** the master volume. It also covers background audio.
-- **Top Screen** and **Bottom Screen:** only the apps currently visible on that screen.
-
-Every two seconds Bifrost checks which app is in front on each screen and captures audio per app. When an app comes to the front, the new capture starts before the old one stops. Each new capture also "kicks" Android's audio routing for 250 ms, so audio that was already playing moves over immediately. On every check Bifrost also looks for capturable audio that is still playing on the Thor's speaker (for example right after an emulator restarts its audio) and pulls it back to the Mac. Captured audio is recorded at full fixed volume, so the Thor's own volume never affects what you hear on the Mac; only the sliders do.
-
-An app that spans both screens counts as Top. Apps that opt out of audio capture (often older games and emulators) stay on the Thor in this mode. For those, turn off **Separate audio per screen**: Bifrost then captures the whole device output, which works with every app.
-
-### Docking: lid, power button, screens, charging
-
-Settings ▸ Docking:
-- **Both screens dark while linked.** It works exactly the way AYN does it for USB-C→HDMI output: both panels' backlight power (`bl_power`) is switched off through AYN's own `PServerBinder` system service. Android keeps rendering, so mirroring continues. "Turn the Thor's screens off as soon as it links" and the toolbar button (⇧⌘P) control this.
-- **Pause mirroring** (toolbar button or ⌃⌘P): the Thor stops capturing and encoding entirely, so USB and its GPU get a rest. Its screens come back on and its sound plays on the device again; files, library and controllers keep working. Resume restarts the stream with a fresh keyframe and puts the screens and audio back the way they were. This uses two control messages added to the server (`PAUSE_VIDEO` 23, `RESUME_VIDEO` 24) that park the encoder loop until resumed.
-- **Closing the lid** makes Android sleep. Bifrost wakes it within about 350 ms, dismisses the keyguard and keeps the screens dark.
-- **Opening the lid** turns the screens back on.
-- **Pressing power** toggles the Thor's screens instead of disconnecting.
-- **Charging separation while linked:** the Thor runs straight from USB power and doesn't charge its battery. Your previous setting comes back on unlink or unplug.
-- **Unlinking or unplugging** turns both screens back on. This step runs on the Thor itself inside the mirroring server's cleanup, so it also works when the cable is pulled or the Mac app is closed abruptly. If the lid is closed, the Thor goes back to sleep.
-- **Pause Sleep Manager while linked** (optional). Sleep Manager's closed-lid protection would lock the Thor and switch Wi-Fi off while docked.
-  - **On link:** Bifrost remembers your usual Wi-Fi/Bluetooth state, taken with the lid open, and keeps it while docked.
-  - **On unlink or unplug:** the server cleanup restores those radios and restarts Sleep Manager. It uses a temporary FGS exemption (`cmd deviceidle tempwhitelist`), because Android 12+ blocks starting it from a background broadcast.
-
-Nothing stays installed on the Thor. The temporary server lives in `/data/local/tmp` only while linked and is deleted on unlink.
-
-## How it works
+### How it works
 
 ```
 Mac (Swift / SwiftUI / AppKit / Metal)              Thor (Android 13)
 ┌──────────────────────────────┐   adb forward    ┌────────────────────────────────────┐
 │ ScreenController (top)       │◀── video+ctrl ──▶│ bifrost-server  display_id=0       │
 │ ScreenController (bottom)    │◀── video+ctrl ──▶│ bifrost-server  display_id=4       │
-│ AudioRouter ── top           │◀── raw PCM ──────│ bifrost-server  audio_uids=<top>   │
-│             ── bottom        │◀── raw PCM ──────│ bifrost-server  audio_uids=<bottom>│
-│             ── background    │◀── raw PCM ──────│ bifrost-server  exclude those uids │
+│ AudioRouter (per screen)     │◀── raw PCM ──────│ bifrost-server  per-app capture    │
 │ PowerGuard                   │◀── getevent ─────│ hall_switch / pmic_pwrkey          │
-│ FileService                  │─── adb push/pull │                                    │
+│ FileService, Library, Ports  │─── adb shell / push / pull                            │
 └──────────────────────────────┘                  └────────────────────────────────────┘
 ```
 
-- **Device server.** It's based on [scrcpy](https://github.com/Genymobile/scrcpy) v4.1's server (Apache 2.0) plus `server/bifrost.patch`. `server/build.sh` fetches the v4.1 tag read-only, applies the patch and builds `Resources/bifrost-server.jar`. The patch adds:
-  - `audio_uids` / `audio_exclude_uids`: per-app playback-capture rules, also covering `USAGE_GAME` and `USAGE_UNKNOWN`.
-  - `audio_kick`: the routing kick described under Audio.
-  - `charging_separation`: set while linked and restored by the cleanup step.
-  - Display power via AYN's `PServerBinder` (`bl_power` for both panels) when that service exists; standard scrcpy behavior otherwise.
-  - A cleanup step that restores display power whether the Thor is awake or asleep, and puts it to sleep if the lid is closed.
-  - Virtual gamepads with the Xbox One S Bluetooth ID (`045e:02fd`) register on the Bluetooth bus, so the kernel's `hid-microsoft` force-feedback driver attaches.
-- **Client.**
-  - **Protocol:** speaks the scrcpy 4.x protocol itself (`Core/`).
-  - **Video:** decodes H.265/H.264 with VideoToolbox and renders through its own Metal pipeline (`Screen/MetalRenderer.swift`): YCbCr→RGB, optional MetalFX spatial upscaling, presentation.
-  - **Audio:** 48 kHz PCM through `AVAudioEngine`, with one mixer per channel and a shared tap for recording and replay.
-  - **Control:** touch, scroll, key, text, clipboard, display-power and UHID gamepad messages over the control socket. The Thor sends rumble back as UHID output report 0x03, which Core Haptics plays on the Mac controller.
-- **Recording.**
-  - **Separate screens:** passthrough writing of the compressed stream (`Capture/Recorder.swift`).
-  - **Window layout:** a 60 fps Metal composite using the same `StageLayout` as the window (`Capture/LayoutRecorder.swift`).
-  - **Instant replay:** a ring buffer of compressed samples and audio (`Capture/ReplayBuffer.swift`), written pull-based when saved (`Capture/ReplayWriter.swift`).
-- **Hidden capture.** The screens are captured through `SurfaceControl.createDisplay` instead of a `DisplayManager` virtual display, so apps never see an extra "presentation" display. Before this, PPSSPP treated the mirror as a TV and moved its picture to the bottom screen.
-- **Performance.** While linked, the aurora background is static. Cinema mode only resamples when a new frame arrives, and one poll of the foreground apps serves both audio routing and Now Playing. Bifrost never changes the Mac's display refresh rate, but the mirror can't show more frames than the Thor sends (60 fps).
-- **Server jar.** Sessions with `cleanup=true` delete their own jar on start, so each video session runs from its own copy and the shared `/data/local/tmp/bifrost-server.jar` stays for the audio sessions.
+**Device server.** It's [scrcpy](https://github.com/Genymobile/scrcpy) 4.1's server (Apache 2.0) with `server/bifrost.patch`. The patch adds:
+- **Audio:** per-app audio capture, plus an audio-routing kick.
+- **Video and power:** hidden display capture, so apps don't see an extra display; AYN `PServerBinder` backlight control; pause/resume video (control messages 23/24); charging separation.
+- **Cleanup on the Thor:** it restores everything on unlink, waits for the lid before sleeping, and stands down when a new session links.
+- **Gamepads:** UHID gamepads with Odin and Xbox identities.
 
-## Project layout
+The server runs from `/data/local/tmp` only while linked.
 
+**Client.**
+- **Protocol:** the scrcpy 4.x protocol.
+- **Video:** VideoToolbox decoding and a Metal renderer with optional MetalFX upscaling.
+- **Audio:** `AVAudioEngine` with adaptive buffering.
+- **Recordings and replay:** passthrough writing.
+- **Gamepads:** game controllers, keyboard and mouse share one input pipeline with per-game profiles.
+
+**Project layout.**
 ```
-Package.swift
 Sources/BifrostLink/
-  App/      BifrostApp (menus, shortcuts), DeviceManager (link lifecycle, capture, replay, stats), LinkSettings, Log
-  Core/     ADB, Socket, ServerSession, ControlChannel, VideoStream, AudioOutput, AudioRouter, PowerGuard
-  Screen/   ScreenView (input), ScreenController, MetalRenderer
-  Input/    KeyMap, GamepadBridge (Xbox descriptor, rumble)
-  Capture/  Recorder, LayoutRecorder, ReplayBuffer, ReplayWriter, ScreenStats
-  Files/    FileService
-  UI/       ContentView, StageView, StageLayout, AudioPanel, FileBrowserView, WelcomeView, SettingsView, WindowObserver, Theme
-server/     bifrost.patch, build.sh
-scripts/    build-app.sh
-Resources/  bifrost-server.jar, logo.png, AppIcon.icns (generated)
+  App/        BifrostApp (menus, windows), DeviceManager, LinkSettings, Log
+  Core/       ADB, ServerSession, ControlChannel, VideoStream, AudioOutput, AudioRouter, PowerGuard
+  Screen/     ScreenView (input), ScreenController, MetalRenderer
+  Input/      KeyMap, GamepadBridge, ControllerProfile
+  Capture/    Recorder, LayoutRecorder, ReplayBuffer, ReplayWriter, ScreenStats
+  Emulation/  EmulationHub, Systems, CocoonBridge, Emulators (saves), EmulatorCleanup, DiscShrinker,
+              RomPatcher, PortCatalog, PlayStats, EmulatorUpdater
+  Files/      FileService
+  UI/         ContentView, StageView, side panel tabs (Files, Library, Ports, Play Time, Saves, Cleanup),
+              Controls, Clip editor, Settings
+server/       bifrost.patch, build.sh
+scripts/      build-app.sh
 ```
 
-## Troubleshooting
-
-- **"Allow USB debugging":** confirm the prompt on the Thor and tick "Always allow".
-- **Nothing shows up:** run `adb devices`. If another adb version owns the server, run `adb kill-server` and relaunch.
-- **No audio on the Mac for a certain app:** it probably opts out of capture. Turn off "Separate audio per screen".
-- **PPSSPP shows the game on the bottom screen:** that's PPSSPP's own Settings ▸ Graphics ▸ "External display". PPSSPP only skips screens Android marks as built-in, and the Thor's bottom screen isn't marked, so PPSSPP treats it as an external monitor. Turn the option off in PPSSPP and the game stays on the top screen.
-- **Video settings** (codec, bitrate, fps, resolution) apply on the next link. Use Device ▸ Relink to apply them now.
-- **Logs:** link, unlink, recording and gamepad events go to `~/Library/Logs/Bifrost Link/bifrost.log`.
-- **Cocoon integration:** Now Playing reads the last launch in `Cocoon_Data/launch_debug.log`, also for players with extra labels such as `ARMSX2 (Refresh)`. Games on either screen count, so PPSSPP, which draws on the bottom screen when its "External display" option is on, gets layouts too. Per-game and per-system layouts live in the layout menu next to the layout picker.
-- **Per-app layouts:** any other app or Android game in front shows up in the same menu as "Remember Layout for This App". Apps without a saved layout use your normal layout.
-- **Latency:** the Thor's encoder runs with real-time priority and minimal frame buffering, the Mac keeps at most two frames queued for display and about 80 ms of audio.
-- **Development:** start the app binary with `BIFROST_DEBUG=1`. That logs audio levels and per-screen stats once a second, and accepts commands as distributed notifications named `eu.nicekaleido.bifrostlink.command` (`saveReplay`, `toggleRecording`, `recordLayout`, `recordSeparate`, `layoutStacked`, `layoutSideBySide`, `screenshot`).
+**Debugging.** Start the app binary with `BIFROST_DEBUG=1`. It then logs audio levels and stats every second, and accepts test commands as distributed notifications named `eu.nicekaleido.bifrostlink.command`.

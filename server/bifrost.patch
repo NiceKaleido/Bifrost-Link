@@ -12,7 +12,7 @@ index e5da2e4..6a978c0 100755
  PLATFORM=${ANDROID_PLATFORM:-36}
  BUILD_TOOLS=${ANDROID_BUILD_TOOLS:-36.0.0}
 diff --git a/server/src/main/java/com/genymobile/scrcpy/CleanUp.java b/server/src/main/java/com/genymobile/scrcpy/CleanUp.java
-index a5816c3..4c70db3 100644
+index a5816c3..a55af0c 100644
 --- a/server/src/main/java/com/genymobile/scrcpy/CleanUp.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/CleanUp.java
 @@ -115,15 +115,29 @@ public final class CleanUp {
@@ -56,10 +56,22 @@ index a5816c3..4c70db3 100644
          };
  
          ProcessBuilder builder = new ProcessBuilder(cmd);
-@@ -185,6 +201,18 @@ public final class CleanUp {
+@@ -185,6 +201,30 @@ public final class CleanUp {
          Looper.prepareMainLooper();
      }
  
++    private static boolean isNewSessionRunning() {
++        try {
++            Process process = Runtime.getRuntime().exec(new String[] {"sh", "-c", "ps -A -o ARGS | grep -c '[c]om.genymobile.scrcpy.Server'"});
++            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()));
++            String line = reader.readLine();
++            process.waitFor();
++            return line != null && Integer.parseInt(line.trim()) > 0;
++        } catch (Exception e) {
++            return false;
++        }
++    }
++
 +    private static boolean isLidClosed() {
 +        try {
 +            Process process = Runtime.getRuntime().exec(new String[] {"sh", "-c", "getevent -pl 2>/dev/null | grep -c 'SW_LID\\*'"});
@@ -75,7 +87,7 @@ index a5816c3..4c70db3 100644
      public static void main(String... args) {
          try {
              // Start a new session to avoid being terminated along with the server process on some devices
-@@ -204,6 +232,8 @@ public final class CleanUp {
+@@ -204,6 +244,8 @@ public final class CleanUp {
          boolean powerOffScreen = Boolean.parseBoolean(args[3]);
          int restoreScreenOffTimeout = Integer.parseInt(args[4]);
          int restoreDisplayImePolicy = Integer.parseInt(args[5]);
@@ -84,7 +96,7 @@ index a5816c3..4c70db3 100644
  
          // Dynamic option
          boolean restoreDisplayPower = false;
-@@ -249,6 +279,15 @@ public final class CleanUp {
+@@ -249,6 +291,15 @@ public final class CleanUp {
              }
          }
  
@@ -100,31 +112,30 @@ index a5816c3..4c70db3 100644
          if (restoreDisplayImePolicy != -1) {
              Ln.i("Restoring \"display IME policy\"");
              ServiceManager.getWindowManager().setDisplayImePolicy(displayId, restoreDisplayImePolicy);
-@@ -256,13 +295,30 @@ public final class CleanUp {
+@@ -256,16 +307,60 @@ public final class CleanUp {
  
          // Change the power of the main display when mirroring a virtual display
          int targetDisplayId = displayId != Device.DISPLAY_ID_NONE ? displayId : 0;
 -        if (Device.isScreenOn(targetDisplayId)) {
 -            if (powerOffScreen) {
++        boolean deferSleep = false;
 +        if (powerOffScreen) {
 +            if (Device.isScreenOn(targetDisplayId)) {
                  Ln.i("Power off screen");
                  Device.powerOffScreen(targetDisplayId);
 -            } else if (restoreDisplayPower) {
 -                Ln.i("Restoring display power");
--                Device.setDisplayPower(targetDisplayId, true);
 +            }
 +        } else if (restoreDisplayPower) {
 +            boolean lidClosed = isLidClosed();
 +            boolean screenOn = Device.isScreenOn(targetDisplayId);
 +            Ln.i("Restoring display power (lid " + (lidClosed ? "closed" : "open") + ", " + (screenOn ? "awake" : "asleep") + ")");
-+            Device.setDisplayPower(targetDisplayId, true);
-+            if (screenOn && lidClosed) {
-+                android.os.SystemClock.sleep(300);
-+                Device.pressReleaseKeycode(android.view.KeyEvent.KEYCODE_SLEEP, targetDisplayId, Device.INJECT_MODE_ASYNC);
-+            }
-+        }
-+
++            deferSleep = screenOn && lidClosed;
++            if (!deferSleep) {
+                 Device.setDisplayPower(targetDisplayId, true);
+             }
+         }
+ 
 +        if (!"-".equals(cleanupShell)) {
 +            Ln.i("Running cleanup commands");
 +            try {
@@ -133,9 +144,39 @@ index a5816c3..4c70db3 100644
 +                process.waitFor();
 +            } catch (Exception e) {
 +                Ln.e("Cleanup commands failed", e);
-             }
-         }
- 
++            }
++        }
++
++        if (deferSleep) {
++            boolean sleep = true;
++            for (int i = 0; i < 30; i++) {
++                android.os.SystemClock.sleep(1000);
++                if (!Device.isScreenOn(targetDisplayId)) {
++                    Ln.i("Device went to sleep on its own, restoring panels");
++                    sleep = false;
++                    break;
++                }
++                if (!isLidClosed()) {
++                    Ln.i("Lid opened, staying awake");
++                    sleep = false;
++                    break;
++                }
++                if (i >= 2 && isNewSessionRunning()) {
++                    Ln.i("Linked again, leaving the screens to the new session");
++                    System.exit(0);
++                }
++            }
++            Device.setDisplayPower(targetDisplayId, true);
++            if (sleep) {
++                Ln.i("Lid stayed closed, going to sleep");
++                android.os.SystemClock.sleep(300);
++                Device.pressReleaseKeycode(android.view.KeyEvent.KEYCODE_SLEEP, targetDisplayId, Device.INJECT_MODE_ASYNC);
++            }
++        }
++
+         System.exit(0);
+     }
+ }
 diff --git a/server/src/main/java/com/genymobile/scrcpy/Options.java b/server/src/main/java/com/genymobile/scrcpy/Options.java
 index 26a6ba9..ac1e881 100644
 --- a/server/src/main/java/com/genymobile/scrcpy/Options.java

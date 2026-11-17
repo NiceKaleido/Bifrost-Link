@@ -27,7 +27,15 @@ final class CocoonBridge: ObservableObject {
     static let homePackages: Set<String> = [package, "com.android.launcher3", "com.odin.odinlauncher", "com.android.settings", "com.android.systemui"]
 
     @Published private(set) var detected = false
-    @Published private(set) var nowPlaying: NowPlaying?
+    @Published private(set) var nowPlaying: NowPlaying? {
+        didSet {
+            guard let old = oldValue, old.file != nowPlaying?.file || old.package != nowPlaying?.package else { return }
+            let ended = Date()
+            Log.write("session ended: \(old.title) after \(Int(ended.timeIntervalSince(old.started) / 60)) min")
+            onSessionEnded?(old, ended)
+        }
+    }
+    var onSessionEnded: ((NowPlaying, Date) -> Void)?
     private var serial: String?
     private var root: String?
     private var task: Task<Void, Never>?
@@ -50,9 +58,6 @@ final class CocoonBridge: ObservableObject {
     func stop() {
         task?.cancel()
         task = nil
-        if let playing = nowPlaying {
-            Log.write("session ended: \(playing.title) after \(Int(Date().timeIntervalSince(playing.started) / 60)) min")
-        }
         nowPlaying = nil
         lastTop = nil
         detected = false
@@ -81,9 +86,6 @@ final class CocoonBridge: ObservableObject {
         lastTop = top
 
         if Self.homePackages.contains(top) {
-            if let playing = nowPlaying {
-                Log.write("session ended: \(playing.title) after \(Int(Date().timeIntervalSince(playing.started) / 60)) min")
-            }
             nowPlaying = nil
             return
         }
@@ -147,6 +149,15 @@ final class CocoonBridge: ObservableObject {
         let system = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
         guard !title.isEmpty else { return nil }
         return Launch(title: title, file: file.isEmpty ? (path as NSString).lastPathComponent : file, system: system, package: package, player: player)
+    }
+
+    func icon(system: String, file: String) async -> NSImage? {
+        guard let serial, let root else { return nil }
+        return await loadIcon(system: system, file: file, serial: serial, root: root)
+    }
+
+    func cachedIcon(system: String, file: String) -> NSImage? {
+        NSImage(contentsOf: cache.appendingPathComponent(system).appendingPathComponent((file as NSString).deletingPathExtension + ".png"))
     }
 
     private func loadIcon(system: String, file: String, serial: String, root: String) async -> NSImage? {

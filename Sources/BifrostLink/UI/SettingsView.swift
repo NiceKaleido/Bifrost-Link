@@ -139,8 +139,16 @@ struct SettingsView: View {
                 Toggle("Pass rumble back to the controller", isOn: $settings.rumbleEnabled)
                     .disabled(!settings.gamepadEnabled || settings.controllerIdentity != "xbox")
                 Toggle("Show a mouse pointer on the Thor", isOn: $settings.hoverEnabled)
+                LabeledContent("Buttons, keyboard & mouse") {
+                    Button("Edit Controls…") { ControlsEditorWindow.open(manager: DeviceManager.shared) }
+                }
             } footer: {
                 footer("As an Odin Controller, apps treat your controller exactly like the Thor’s built-in one, so your existing mappings just work. Rumble needs the Xbox identity, because Android only vibrates Xbox controllers here.")
+            }
+            Section {
+                Toggle("Type with the Mac keyboard", isOn: $settings.macKeyboardTyping)
+            } footer: {
+                footer("Cocoon’s on-screen keyboard is made for controllers and turns Enter and the arrow keys into keyboard navigation. While linked, Bifrost switches it off so your Mac keyboard types normally, and switches it back on when you unlink. Turn this off if you’d rather type with a controller on Cocoon’s keyboard.")
             }
             Section("Mouse & trackpad") {
                 LabeledContent("Click and drag", value: "Touch")
@@ -163,13 +171,22 @@ struct SettingsView: View {
             Section {
                 folderRow("Save backups", path: $settings.saveBackupFolder)
                 Toggle("Back up saves once a day when the Thor links", isOn: $settings.autoSaveBackup)
-                Picker("Keep automatic backups", selection: $settings.saveBackupKeep) {
-                    ForEach([5, 10, 20, 50], id: \.self) { Text("\($0)").tag($0) }
+                Picker("Keep", selection: $settings.saveBackupKeep) {
+                    ForEach([3, 5, 10, 20, 50], id: \.self) { Text("The last \($0) backups").tag($0) }
+                    Text("Every backup").tag(0)
                 }
             } header: {
                 Text("Save backups")
             } footer: {
-                footer("Saves and states from your emulators are copied to the Mac. Manual backups are always kept.")
+                footer("Saves and states from your emulators are copied to the Mac. Once there are more backups than you keep, the oldest are replaced. Pinned backups are never replaced. Choose what gets backed up, and add your own folders, in the Saves tab.")
+            }
+            Section {
+                Toggle("Check for port updates when the Thor links", isOn: $settings.checkPortUpdates)
+                Toggle("Show ports rated for the Thor first", isOn: $settings.thorRatedFirst)
+            } header: {
+                Text("Native ports")
+            } footer: {
+                footer("Window ▸ Ports lists native ports of games for Android from the Recompa catalog (recompa.app), with ratings from other Thor owners. Downloads come straight from each port’s GitHub page and are checked against the catalog before anything is installed.")
             }
             Section {
                 LabeledContent("Disc image shrinking", value: EmulationHub.tools["chdman"].flatMap { $0 } != nil ? "Built in (chdman)" : "Unavailable")

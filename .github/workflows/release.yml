@@ -29,7 +29,7 @@ jobs:
 
       - name: Install bundled tools
         run: |
-          brew install rom-tools
+          brew install rom-tools xdelta
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;36.0.0" >/dev/null
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 

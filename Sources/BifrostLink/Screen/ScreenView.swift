@@ -11,7 +11,21 @@ protocol ScreenInputDelegate: AnyObject {
     func screenViewCopy(_ view: ScreenView, cut: Bool)
 }
 
+@MainActor
+protocol PadRouter: AnyObject {
+    var padActive: Bool { get }
+    var padUsesMouse: Bool { get }
+    var pointerCaptured: Bool { get }
+    func padKey(_ keyCode: UInt16, down: Bool) -> Bool
+    func padCapturePointer()
+    func padReleasePointer()
+    func padMouse(dx: CGFloat, dy: CGFloat)
+    func padClick(right: Bool, down: Bool)
+}
+
 final class ScreenView: NSView {
+    static weak var padRouter: PadRouter?
+
     enum OverlayGesture {
         case began(corner: CGPoint?)
         case changed(dx: CGFloat, dy: CGFloat)
@@ -126,7 +140,40 @@ final class ScreenView: NSView {
         isFloating && onOverlayGesture != nil && event.modifierFlags.contains(.command)
     }
 
+    private var router: PadRouter? {
+        guard let router = Self.padRouter, router.padActive else { return nil }
+        return router
+    }
+
+    private func padMouseDown(right: Bool) -> Bool {
+        guard let router, router.padUsesMouse else { return false }
+        window?.makeFirstResponder(self)
+        if router.pointerCaptured {
+            router.padClick(right: right, down: true)
+        } else if !right {
+            router.padCapturePointer()
+        }
+        return true
+    }
+
+    private func padMouseUp(right: Bool) -> Bool {
+        guard let router, router.padUsesMouse else { return false }
+        if router.pointerCaptured { router.padClick(right: right, down: false) }
+        return true
+    }
+
+    private func padMouseMove(_ event: NSEvent) -> Bool {
+        guard let router, router.pointerCaptured else { return false }
+        router.padMouse(dx: event.deltaX, dy: event.deltaY)
+        return true
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        _ = padMouseMove(event)
+    }
+
     override func mouseDown(with event: NSEvent) {
+        if padMouseDown(right: false) { return }
         if isOverlayGesture(event) {
             overlayDragStart = event.locationInWindow
             let local = convert(event.locationInWindow, from: nil)
@@ -142,6 +189,7 @@ final class ScreenView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if padMouseMove(event) { return }
         if let start = overlayDragStart {
             let now = event.locationInWindow
             onOverlayGesture?(.changed(dx: now.x - start.x, dy: start.y - now.y))
@@ -152,6 +200,7 @@ final class ScreenView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if padMouseUp(right: false) { return }
         if overlayDragStart != nil {
             overlayDragStart = nil
             onOverlayGesture?(.ended)
@@ -164,6 +213,7 @@ final class ScreenView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        if padMouseMove(event) { return }
         if isFloating && onOverlayGesture != nil {
             if event.modifierFlags.contains(.command) {
                 (overlayCorner(at: convert(event.locationInWindow, from: nil)) == nil ? NSCursor.openHand : NSCursor.crosshair).set()
@@ -176,11 +226,13 @@ final class ScreenView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        if padMouseDown(right: true) { return }
         window?.makeFirstResponder(self)
         inputDelegate?.control?.backOrScreenOn(.down)
     }
 
     override func rightMouseUp(with event: NSEvent) {
+        if padMouseUp(right: true) { return }
         inputDelegate?.control?.backOrScreenOn(.up)
     }
 
@@ -269,6 +321,13 @@ final class ScreenView: NSView {
     override func keyDown(with event: NSEvent) {
         guard let control = inputDelegate?.control else { return }
         if event.modifierFlags.contains(.command) { return }
+        if let router {
+            if event.keyCode == 53 && router.pointerCaptured {
+                router.padReleasePointer()
+                return
+            }
+            if router.padKey(event.keyCode, down: true) { return }
+        }
         switch KeyMap.translate(event) {
         case .key(let code, let meta):
             control.injectKeycode(action: .down, keycode: code, repeatCount: event.isARepeat ? 1 : 0, metaState: meta)
@@ -281,6 +340,7 @@ final class ScreenView: NSView {
 
     override func keyUp(with event: NSEvent) {
         guard let control = inputDelegate?.control else { return }
+        if let router, router.padKey(event.keyCode, down: false) { return }
         if case .key(let code, let meta) = KeyMap.translate(event) {
             control.injectKeycode(action: .up, keycode: code, metaState: meta)
         }
@@ -297,6 +357,7 @@ final class ScreenView: NSView {
         default: flag = .capsLock
         }
         let down = event.modifierFlags.contains(flag)
+        if let router, router.padKey(event.keyCode, down: down) { return }
         if flag == .capsLock {
             control.pressKey(code)
         } else {

@@ -116,7 +116,7 @@ final class CleanupService: ObservableObject {
         let perGame = items.filter { $0.category.perGame }
         if !perGame.isEmpty {
             working = "Backing up \(perGame.count) save item(s) first…"
-            let backup = await backups?.backup(label: "Before cleanup", only: perGame.map { ($0.emulator, $0.path) })
+            let backup = await backups?.backup(label: "Before cleanup", only: perGame.map { (emulator: $0.emulator, remote: $0.path, custom: false) })
             guard backup != nil else {
                 working = nil
                 toast?("exclamationmark.triangle", "Backup failed, nothing was removed")

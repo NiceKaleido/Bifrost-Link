@@ -3,6 +3,7 @@ import SwiftUI
 struct ActivityPanel: View {
     @ObservedObject var files: FileService
     @ObservedObject var hub: EmulationHub
+    @ObservedObject var ports: PortCatalog
     @AppStorage("activityExpanded") private var expanded = true
 
     private var ordered: [Transfer] {
@@ -37,6 +38,10 @@ struct ActivityPanel: View {
             let moved = total.reduce(Int64(0)) { $0 + ($1.status == .done ? $1.totalBytes : $1.transferred) }
             parts.append("\(done + 1) of \(total.count) · \(moved.bytesText) of \(bytes.bytesText)")
         }
+        let installing = ports.jobs.filter(\.isActive)
+        if !installing.isEmpty {
+            parts.append(installing.count == 1 ? "Installing \(installing[0].portName)" : "Installing \(installing.count) ports")
+        }
         let shrinking = hub.shrinkJobs.filter(\.isActive)
         if !shrinking.isEmpty {
             let total = hub.shrinkJobs.filter { $0.isActive || { if case .done = $0.status { return true }; return false }($0) }.count
@@ -50,12 +55,15 @@ struct ActivityPanel: View {
     }
 
     var body: some View {
-        if !files.transfers.isEmpty || !hub.shrinkJobs.isEmpty {
+        if !files.transfers.isEmpty || !hub.shrinkJobs.isEmpty || !ports.jobs.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 header
                 if expanded {
                     ScrollView {
                         LazyVStack(spacing: 8) {
+                            ForEach(ports.jobs) { job in
+                                PortJobRow(job: job, catalog: ports)
+                            }
                             ForEach(orderedJobs) { job in
                                 ShrinkJobRow(job: job) { hub.cancelShrink(job.id) }
                             }
@@ -87,11 +95,15 @@ struct ActivityPanel: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 4)
-            if files.activeCount + hub.shrinkJobs.filter(\.isActive).count > 1 {
-                Button("Cancel All") { files.cancelAll(); hub.cancelAllShrinks() }.buttonStyle(.borderless).font(.caption)
+            if files.activeCount + hub.shrinkJobs.filter(\.isActive).count + ports.jobs.filter(\.isActive).count > 1 {
+                Button("Cancel All") {
+                    files.cancelAll()
+                    hub.cancelAllShrinks()
+                    ports.jobs.filter(\.isActive).forEach { ports.cancel($0.id) }
+                }.buttonStyle(.borderless).font(.caption)
             }
-            if files.transfers.contains(where: { !$0.isActive }) || hub.shrinkJobs.contains(where: { !$0.isActive }) {
-                Button("Clear") { files.clearFinished(); hub.clearFinishedShrinks() }.buttonStyle(.borderless).font(.caption)
+            if files.transfers.contains(where: { !$0.isActive }) || hub.shrinkJobs.contains(where: { !$0.isActive }) || ports.jobs.contains(where: { !$0.isActive }) {
+                Button("Clear") { files.clearFinished(); hub.clearFinishedShrinks(); ports.clearFinished() }.buttonStyle(.borderless).font(.caption)
             }
         }
     }

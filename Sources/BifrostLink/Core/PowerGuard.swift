@@ -118,10 +118,12 @@ final class PowerGuard {
         return woke
     }
 
+    static let deferredSleepShell = #"nohup sh -c 'i=0; while [ $i -lt 30 ]; do sleep 1; i=$((i+1)); getevent -pl 2>/dev/null | grep -q "SW_LID\*" || exit 0; [ $i -gt 2 ] && ps -A -o ARGS | grep -q "[c]om.genymobile.scrcpy.Server" && exit 0; done; input keyevent 223' >/dev/null 2>&1 &"#
+
     func releaseDevice() async {
         stop()
         if lidClosed && settings.sleepOnUnlinkIfClosed {
-            _ = try? await ADB.shared.shell("input keyevent 223", serial: serial, timeout: 5)
+            _ = try? await ADB.shared.shell(Self.deferredSleepShell, serial: serial, timeout: 5)
         } else if !panelsOn {
             panelsOn = true
             setPanels?(true)

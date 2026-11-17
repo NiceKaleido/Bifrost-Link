@@ -67,17 +67,6 @@ struct FileBrowserView: View {
                 }
             }
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) {
-                    Spacer(minLength: 0)
-                    placeChips
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) { placeChips }
-                }
-                .defaultScrollAnchor(.trailing)
-            }
-
             HStack(spacing: 6) {
                 Button { selection.removeAll(); files.goUp() } label: { Image(systemName: "chevron.left").frame(width: 14) }
                     .disabled(files.path == "/")
@@ -87,11 +76,21 @@ struct FileBrowserView: View {
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                Button { Task { await files.loadVolumes(); await files.reload(); await files.loadSpace() } } label: {
-                    if files.loading { ProgressView().controlSize(.mini).frame(width: 14) } else { Image(systemName: "arrow.clockwise").frame(width: 14) }
+                Menu {
+                    ForEach(files.space.isEmpty ? files.places : FileService.folderPlaces, id: \.self) { place in
+                        Button {
+                            selection.removeAll()
+                            files.open(place.path)
+                        } label: {
+                            Label(place.name, systemImage: place.symbol)
+                        }
+                    }
+                } label: {
+                    Text("Go to")
                 }
-                .help("Refresh")
-                .accessibilityLabel("Refresh")
+                .fixedSize()
+                .help("Jump to Downloads, Roms, screenshots and other common folders")
+                .accessibilityLabel("Go to")
             }
 
             HStack(spacing: 6) {
@@ -121,21 +120,6 @@ struct FileBrowserView: View {
             .controlSize(.small)
         }
         .padding(12)
-    }
-
-    private var placeChips: some View {
-        ForEach(files.space.isEmpty ? files.places : FileService.folderPlaces, id: \.self) { place in
-            Button {
-                selection.removeAll()
-                files.open(place.path)
-            } label: {
-                Label(place.name, systemImage: place.symbol)
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(files.path == place.path ? AnyShapeStyle(Theme.accent.opacity(0.35)) : AnyShapeStyle(Theme.panel), in: Capsule())
-            }
-            .buttonStyle(.plain)
-        }
     }
 
     private var selectionBar: some View {
@@ -234,6 +218,13 @@ struct FileBrowserView: View {
                     Button("Copy Path") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(file.path, forType: .string)
+                    }
+                    if file.isDirectory {
+                        if settings.customSaveFolders.contains(where: { $0.path == file.path }) {
+                            Button("Stop Backing Up With Saves") { settings.removeCustomSaveFolder(file.path) }
+                        } else {
+                            Button("Back Up With Saves") { settings.addCustomSaveFolder(file.path) }
+                        }
                     }
                 }
                 if !targets.isEmpty {

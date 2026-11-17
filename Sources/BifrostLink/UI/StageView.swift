@@ -203,7 +203,7 @@ struct StageView: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                         .allowsHitTesting(false)
                 }
-                ForEach(manager.screens, id: \.role) { screen in
+                ForEach(manager.screens.filter { $0.role != settings.detachedRole }, id: \.role) { screen in
                     let p = placements[screen.role] ?? TilePlacement(rect: CGRect(x: geo.size.width / 2, y: geo.size.height / 2, width: 1, height: 1), visible: false)
                     ScreenTile(controller: screen, chrome: chrome || p.floating,
                                audioLatency: screen.role == .top ? manager.audioLatencyMs : nil)

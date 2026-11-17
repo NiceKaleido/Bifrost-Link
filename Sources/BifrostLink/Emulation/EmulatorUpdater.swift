@@ -52,6 +52,8 @@ final class EmulatorUpdater: ObservableObject {
             .compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    var excludedPackages: Set<String> = []
+
     func reset(serial: String?) {
         self.serial = serial
         apps = []
@@ -87,7 +89,7 @@ final class EmulatorUpdater: ObservableObject {
             guard let pkgPart = parts.first, pkgPart.hasPrefix("package:") else { continue }
             let package = String(pkgPart.dropFirst("package:".count))
             let installer = parts.first { $0.hasPrefix("installer=") }.map { String($0.dropFirst("installer=".count)) } ?? "null"
-            if installer != "com.android.vending" && installer != package {
+            if installer != "com.android.vending" && installer != package && !excludedPackages.contains(package) {
                 sideloaded.append(package)
             }
         }

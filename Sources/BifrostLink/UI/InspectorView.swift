@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, library, saves, cleanup
+    case files, library, ports, playtime, saves, cleanup
 
     var id: String { rawValue }
 
@@ -9,19 +9,47 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         switch self {
         case .files: return "Files"
         case .library: return "Library"
+        case .ports: return "Ports"
+        case .playtime: return "Play Time"
         case .saves: return "Saves"
         case .cleanup: return "Cleanup"
         }
     }
 
+    var headline: String {
+        switch self {
+        case .files: return "Files on your Thor"
+        case .library: return "Game Library"
+        case .ports: return "Native Ports"
+        case .playtime: return "Play Time"
+        case .saves: return "Save Backups"
+        case .cleanup: return "Cleanup"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .files: return "Browse internal storage and the SD card, copy files both ways."
+        case .library: return "Import games, check your collection and make room."
+        case .ports: return "Android versions of classic games, rated by Thor owners."
+        case .playtime: return "How long you play, on the Thor and while docked."
+        case .saves: return "Copies of your emulator saves and settings on this Mac."
+        case .cleanup: return "Free up space that emulators leave behind."
+        }
+    }
+
     var symbol: String {
         switch self {
-        case .files: return "folder"
-        case .library: return "square.stack.3d.up"
-        case .saves: return "externaldrive.badge.checkmark"
+        case .files: return "folder.fill"
+        case .library: return "books.vertical.fill"
+        case .ports: return "shippingbox.fill"
+        case .playtime: return "timer"
+        case .saves: return "clock.arrow.circlepath"
         case .cleanup: return "sparkles"
         }
     }
+
+    static let groups: [[InspectorTab]] = [[.files], [.library, .ports, .playtime], [.saves, .cleanup]]
 }
 
 struct InspectorView: View {
@@ -30,27 +58,208 @@ struct InspectorView: View {
     @AppStorage("inspectorTab") private var tab: InspectorTab = .files
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Section", selection: $tab) {
-                ForEach(InspectorTab.allCases) { tab in
-                    Label(tab.title, systemImage: tab.symbol).tag(tab)
+        HStack(spacing: 0) {
+            SectionRail(selection: $tab, ports: manager.ports)
+            Rectangle().fill(Theme.hairline).frame(width: 1)
+            VStack(spacing: 0) {
+                PanelHeader(tab: tab) { headerActions }
+                Divider().opacity(0.6)
+                Group {
+                    switch tab {
+                    case .files: FileBrowserView(files: manager.files, settings: settings)
+                    case .library: LibraryView(hub: manager.emulation, files: manager.files, updater: manager.updater, ports: manager.ports)
+                    case .ports: PortsPanel(catalog: manager.ports, manager: manager, settings: settings)
+                    case .playtime: PlayTimeView(stats: manager.stats, cocoon: manager.cocoon)
+                    case .saves: SavesView(backups: manager.backups, settings: settings)
+                    case .cleanup: CleanupView(cleanup: manager.cleanup)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ActivityPanel(files: manager.files, hub: manager.emulation, ports: manager.ports)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var headerActions: some View {
+        switch tab {
+        case .files: FilesHeaderActions(files: manager.files)
+        case .library: LibraryHeaderActions(hub: manager.emulation)
+        case .ports: PortsHeaderActions(catalog: manager.ports)
+        case .playtime: PlayTimeHeaderActions(stats: manager.stats)
+        case .saves: SavesHeaderActions(backups: manager.backups)
+        case .cleanup: CleanupHeaderActions(cleanup: manager.cleanup)
+        }
+    }
+}
+
+struct SectionRail: View {
+    @Binding var selection: InspectorTab
+    @ObservedObject var ports: PortCatalog
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(Array(InspectorTab.groups.enumerated()), id: \.offset) { index, group in
+                if index > 0 {
+                    Rectangle().fill(Theme.hairline).frame(width: 36, height: 1).padding(.vertical, 6)
+                }
+                ForEach(group) { tab in
+                    RailButton(tab: tab, selected: selection == tab, badge: tab == .ports ? ports.updates.count : 0) {
+                        withAnimation(.easeOut(duration: 0.15)) { selection = tab }
+                    }
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
-
-            switch tab {
-            case .files: FileBrowserView(files: manager.files, settings: settings)
-            case .library: LibraryView(hub: manager.emulation, files: manager.files, updater: manager.updater)
-            case .saves: SavesView(backups: manager.backups, settings: settings)
-            case .cleanup: CleanupView(cleanup: manager.cleanup)
-            }
-            ActivityPanel(files: manager.files, hub: manager.emulation)
+            Spacer(minLength: 0)
         }
-        .frame(minWidth: 320)
+        .padding(.top, 12)
+        .padding(.horizontal, 6)
+        .frame(width: 76)
+        .frame(maxHeight: .infinity)
+        .background(Color.black.opacity(0.12))
+    }
+}
+
+struct RailButton: View {
+    let tab: InspectorTab
+    let selected: Bool
+    var badge = 0
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: tab.symbol)
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(height: 20)
+                Text(tab.title)
+                    .font(.system(size: 10, weight: selected ? .semibold : .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+            .frame(width: 64, height: 52)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(selected ? Theme.accent.opacity(0.16) : (hovering ? Theme.panel : .clear))
+            }
+            .overlay(alignment: .topTrailing) {
+                if badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Theme.accent, in: Capsule())
+                        .offset(x: -6, y: 4)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(tab.subtitle)
+        .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+struct PanelHeader<Actions: View>: View {
+    let tab: InspectorTab
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tab.headline).font(.title3.weight(.semibold))
+                Text(tab.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            actions.controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+    }
+}
+
+struct FilesHeaderActions: View {
+    @ObservedObject var files: FileService
+
+    var body: some View {
+        Button { Task { await files.loadVolumes(); await files.reload(); await files.loadSpace() } } label: {
+            if files.loading { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise") }
+        }
+        .help("Refresh")
+    }
+}
+
+struct LibraryHeaderActions: View {
+    @ObservedObject var hub: EmulationHub
+
+    var body: some View {
+        if hub.lastScan != nil || hub.scanning {
+            Button { Task { await hub.scan() } } label: {
+                if hub.scanning { ProgressView().controlSize(.mini) } else { Label("Rescan", systemImage: "arrow.clockwise") }
+            }
+            .disabled(hub.scanning)
+            .help(hub.lastScan.map { "Last checked \($0.formatted(.relative(presentation: .named)))" } ?? "Checking…")
+        }
+    }
+}
+
+struct PortsHeaderActions: View {
+    @ObservedObject var catalog: PortCatalog
+
+    var body: some View {
+        Button {
+            Task {
+                await catalog.refresh(force: true)
+                await catalog.detectInstalled()
+            }
+        } label: {
+            if catalog.loading || catalog.detecting { ProgressView().controlSize(.mini) } else { Label("Refresh", systemImage: "arrow.clockwise") }
+        }
+        .disabled(catalog.loading || catalog.detecting)
+        .help("Load the latest catalog and check the Thor again")
+    }
+}
+
+struct PlayTimeHeaderActions: View {
+    @ObservedObject var stats: PlayStats
+
+    var body: some View {
+        Button { Task { await stats.refreshCocoon() } } label: {
+            if stats.refreshing { ProgressView().controlSize(.mini) } else { Label("Refresh", systemImage: "arrow.clockwise") }
+        }
+        .disabled(stats.serial == nil || stats.refreshing)
+        .help(stats.cocoonUpdated.map { "Cocoon’s play time was read \($0.formatted(.relative(presentation: .named)))" } ?? "Read play time from Cocoon")
+    }
+}
+
+struct SavesHeaderActions: View {
+    @ObservedObject var backups: SaveBackupService
+
+    var body: some View {
+        Button { Task { await backups.backup() } } label: {
+            Label(backups.running ? "Working…" : "Back Up Now", systemImage: "arrow.down.to.line")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(backups.running || backups.serial == nil)
+    }
+}
+
+struct CleanupHeaderActions: View {
+    @ObservedObject var cleanup: CleanupService
+
+    var body: some View {
+        if !cleanup.usage.isEmpty {
+            Button { Task { await cleanup.scan() } } label: {
+                if cleanup.scanning { ProgressView().controlSize(.mini) } else { Label("Measure", systemImage: "arrow.clockwise") }
+            }
+            .disabled(cleanup.scanning || cleanup.working != nil)
+            .help("Measure again")
+        }
     }
 }
 
@@ -107,6 +316,7 @@ struct LibraryView: View {
     @ObservedObject var hub: EmulationHub
     @ObservedObject var files: FileService
     @ObservedObject var updater: EmulatorUpdater
+    @ObservedObject var ports: PortCatalog
     @State private var repoTarget: SideloadedApp?
     @State private var repoText = ""
     @State private var dropTargeted = false
@@ -164,10 +374,6 @@ struct LibraryView: View {
             Text("They’re sorted into the right system folder automatically.").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             HStack {
                 Button("Choose Files…") { pick() }
-                if hub.lastScan != nil {
-                    Button { Task { await hub.scan() } } label: { Label("Rescan", systemImage: "arrow.clockwise") }
-                        .disabled(hub.scanning)
-                }
             }
             .controlSize(.small)
             .padding(.top, 2)
@@ -179,10 +385,7 @@ struct LibraryView: View {
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             Task {
                 let urls = await DropLoader.fileURLs(providers)
-                await MainActor.run {
-                    hub.prepareImport(urls)
-                    if hub.importItems.isEmpty { hub.toast?("questionmark.folder", "Drop ROM files here, folders aren’t imported") }
-                }
+                await MainActor.run { hub.prepareImport(urls) }
             }
             return true
         }
@@ -196,16 +399,25 @@ struct LibraryView: View {
         if panel.runModal() == .OK { hub.prepareImport(panel.urls) }
     }
 
+    private func checkAll() {
+        Task {
+            await ports.refresh()
+            updater.excludedPackages = ports.packages
+            await updater.check()
+        }
+    }
+
     @ViewBuilder
     private var updatesSection: some View {
         let available = updater.apps.filter(\.updateAvailable).count
-        SectionHeader(title: "App updates", symbol: "arrow.down.app", trailing: updater.apps.isEmpty ? nil : (available == 0 ? "up to date" : "\(available) available"))
+        let anything = !updater.apps.isEmpty
+        SectionHeader(title: "App updates", symbol: "arrow.down.app", trailing: anything ? (available == 0 ? "up to date" : "\(available) available") : nil)
         Card {
-            if updater.apps.isEmpty {
+            if !anything {
                 HStack {
-                    Text("Checks apps you installed outside the Play Store against their GitHub releases.").font(.caption).foregroundStyle(.secondary)
+                    Text("Checks emulators and apps you installed outside the Play Store against their GitHub releases. Native ports are updated in the Ports section.").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button(updater.checking ? "Checking…" : "Check") { Task { await updater.check() } }
+                    Button(updater.checking ? "Checking…" : "Check") { checkAll() }
                         .controlSize(.small)
                         .disabled(updater.checking || updater.serial == nil)
                 }
@@ -223,10 +435,12 @@ struct LibraryView: View {
                 HStack {
                     Text("Updates are verified before installing and keep your data.").font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
-                    Button { Task { await updater.check() } } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless)
-                        .disabled(updater.checking)
-                        .help("Check again")
+                    Button { checkAll() } label: {
+                        if updater.checking { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise") }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(updater.checking)
+                    .help("Check again")
                 }
             }
         }
@@ -438,39 +652,85 @@ struct LibraryView: View {
 
 struct ImportSheet: View {
     @ObservedObject var hub: EmulationHub
+    @State private var thorPickerFor: URL?
+
+    private var visibleItems: [Binding<ImportItem>] {
+        $hub.importItems.filter { hub.importOriginals || !hub.isOriginalOnlyForPatch($0.wrappedValue) }
+    }
+
+    private var sending: [ImportItem] {
+        hub.importItems.filter { hub.importOriginals || !hub.isOriginalOnlyForPatch($0) }
+    }
+
+    private var hasOriginals: Bool { hub.importItems.contains(where: hub.isOriginalOnlyForPatch) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(hub.importItems.count == 1 ? "Import 1 ROM" : "Import \(hub.importItems.count) ROMs").font(.title3.weight(.semibold))
-                Text("Pick the system for each game. It goes straight into that system’s folder on your Thor.").font(.callout).foregroundStyle(.secondary)
-                if hub.importItems.count > 1 {
-                    Picker("Set all to", selection: Binding(
-                        get: {
-                            let systems = Set(hub.importItems.map(\.system))
-                            guard systems.count == 1, let only = systems.first, hub.installedSystems.contains(only) else { return "mixed" }
-                            return only
-                        },
-                        set: { system in
-                            guard system != "mixed" else { return }
-                            for i in hub.importItems.indices { hub.importItems[i].system = system }
-                        })) {
-                        Text("Each its own").tag("mixed")
-                        ForEach(hub.installedSystems, id: \.self) { Text(Systems.name(for: $0)).tag($0) }
+                Text(title).font(.title3.weight(.semibold))
+                Text(hub.importItems.contains { $0.patch != nil } || !hub.unpairedPatches.isEmpty
+                     ? "Patches are applied on this Mac, then the patched game goes straight into its system’s folder on your Thor."
+                     : "Pick the system for each game. It goes straight into that system’s folder on your Thor.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    if sending.count > 1 {
+                        Picker("Set all to", selection: Binding(
+                            get: {
+                                let systems = Set(sending.map(\.system))
+                                guard systems.count == 1, let only = systems.first, hub.installedSystems.contains(only) else { return "mixed" }
+                                return only
+                            },
+                            set: { system in
+                                guard system != "mixed" else { return }
+                                for i in hub.importItems.indices { hub.importItems[i].system = system }
+                            })) {
+                            Text("Each its own").tag("mixed")
+                            ForEach(hub.installedSystems, id: \.self) { Text(Systems.name(for: $0)).tag($0) }
+                        }
+                        .frame(maxWidth: 300)
                     }
-                    .frame(maxWidth: 300)
-                    .padding(.top, 6)
+                    if hasOriginals {
+                        Toggle("Also send the unpatched originals", isOn: $hub.importOriginals)
+                            .toggleStyle(.checkbox)
+                    }
                 }
+                .padding(.top, 6)
             }
             .padding(18)
             Divider().opacity(0.5)
             List {
-                ForEach($hub.importItems) { $item in
+                if !hub.unpairedPatches.isEmpty {
+                    Section("Patches waiting for their game") {
+                        ForEach(hub.unpairedPatches, id: \.self) { patch in
+                            HStack(spacing: 10) {
+                                Image(systemName: "bandage").foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(patch.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                                    Text("Choose the game this patch is for").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                Button("On This Mac…") { chooseLocal(for: patch) }
+                                Button("On the Thor…") { thorPickerFor = patch }
+                                    .disabled(hub.serial == nil)
+                            }
+                            .controlSize(.small)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+                ForEach(visibleItems) { $item in
                     HStack(spacing: 10) {
-                        Image(systemName: "gamecontroller").foregroundStyle(Theme.accent)
+                        Image(systemName: item.patch != nil ? "bandage.fill" : "gamecontroller")
+                            .foregroundStyle(item.patch != nil ? AnyShapeStyle(Theme.bifrost) : AnyShapeStyle(Theme.accent))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(item.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
-                            Text(item.system == "unsorted" ? item.size.bytesText : "\(item.size.bytesText) → \(hub.targetFolder(for: item.system))").font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
+                            if item.patch != nil {
+                                TextField("Name", text: $item.outputName).textFieldStyle(.plain)
+                                Text("\(item.patch?.lastPathComponent ?? "") + \(item.remoteSource.map { "Thor: " + ($0 as NSString).lastPathComponent } ?? item.url.lastPathComponent)")
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            } else {
+                                Text(item.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                            }
+                            Text(item.system == "unsorted" ? item.size.bytesText : "\(item.patch != nil ? "≈ " : "")\(item.size.bytesText) → \(item.remoteSource.map { ($0 as NSString).deletingLastPathComponent } ?? hub.targetFolder(for: item.system))").font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
                         }
                         Spacer()
                         Picker("System", selection: $item.system) {
@@ -479,6 +739,8 @@ struct ImportSheet: View {
                         }
                         .labelsHidden()
                         .frame(width: 190)
+                        .disabled(item.remoteSource != nil)
+                        .help(item.remoteSource != nil ? "Goes next to the original on the Thor" : "")
                     }
                     .padding(.vertical, 2)
                 }
@@ -486,18 +748,104 @@ struct ImportSheet: View {
             .listStyle(.inset)
             Divider().opacity(0.5)
             HStack {
-                Text(hub.importItems.reduce(0) { $0 + $1.size }.bytesText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                if let pairing = hub.pairing {
+                    ProgressView().controlSize(.small)
+                    Text(pairing).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else {
+                    Text(sending.reduce(0) { $0 + $1.size }.bytesText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("Cancel", role: .cancel) { hub.importItems = [] }
-                    .keyboardShortcut(.cancelAction)
-                Button("Import") { Task { await hub.performImport() } }
+                Button("Cancel", role: .cancel) {
+                    hub.importItems = []
+                    hub.unpairedPatches = []
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(sending.contains { $0.patch != nil } ? "Patch & Import" : "Import") { Task { await hub.performImport() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(hub.importItems.contains { $0.system == "unsorted" })
+                    .disabled(sending.isEmpty || hub.pairing != nil || sending.contains { $0.system == "unsorted" } || sending.contains { $0.patch != nil && $0.outputName.trimmingCharacters(in: .whitespaces).isEmpty })
                     .buttonStyle(.borderedProminent)
             }
             .padding(14)
         }
-        .frame(width: 620, height: 440)
+        .frame(width: 640, height: 460)
+        .sheet(item: Binding(get: { thorPickerFor.map(PatchTarget.init) }, set: { thorPickerFor = $0?.patch })) { target in
+            ThorRomPicker(hub: hub, patch: target.patch) { thorPickerFor = nil }
+        }
+    }
+
+    private var title: String {
+        let patched = hub.importItems.filter { $0.patch != nil }.count + hub.unpairedPatches.count
+        let plain = sending.filter { $0.patch == nil }.count
+        if patched == 0 { return plain == 1 ? "Import 1 ROM" : "Import \(plain) ROMs" }
+        if plain == 0 { return patched == 1 ? "Patch 1 Game" : "Patch \(patched) Games" }
+        return "Patch \(patched) & Import \(plain)"
+    }
+
+    private func chooseLocal(for patch: URL) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the game “\(patch.lastPathComponent)” is for"
+        panel.directoryURL = patch.deletingLastPathComponent()
+        if panel.runModal() == .OK, let url = panel.url { hub.pair(patch, withLocal: url) }
+    }
+}
+
+struct PatchTarget: Identifiable {
+    let patch: URL
+    var id: URL { patch }
+}
+
+struct ThorRomPicker: View {
+    @ObservedObject var hub: EmulationHub
+    let patch: URL
+    let done: () -> Void
+    @State private var roms: [String] = []
+    @State private var loading = true
+    @State private var query = ""
+    @State private var selection: String?
+
+    private var filtered: [String] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return q.isEmpty ? roms : roms.filter { $0.lowercased().contains(q) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Which game is “\(patch.lastPathComponent)” for?").font(.headline)
+            TextField("Search your games", text: $query).textFieldStyle(.roundedBorder)
+            if loading {
+                ProgressView("Listing games on the Thor…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filtered, id: \.self, selection: $selection) { path in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text((path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
+                        Text((path as NSString).deletingLastPathComponent).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
+                    }
+                    .tag(path)
+                }
+                .listStyle(.inset)
+            }
+            HStack {
+                Text("The game is copied to this Mac, patched, and the patched copy goes next to the original.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel", action: done).keyboardShortcut(.cancelAction)
+                Button("Use This Game") {
+                    guard let selection else { return }
+                    done()
+                    Task { await hub.pair(patch, withRemote: selection) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selection == nil)
+            }
+        }
+        .padding(18)
+        .frame(width: 560, height: 480)
+        .task {
+            roms = await hub.thorRoms()
+            loading = false
+        }
     }
 }
 
@@ -505,7 +853,7 @@ struct ImportSheetPresenter: ViewModifier {
     @ObservedObject var hub: EmulationHub
 
     func body(content: Content) -> some View {
-        content.sheet(isPresented: Binding(get: { !hub.importItems.isEmpty }, set: { if !$0 { hub.importItems = [] } })) {
+        content.sheet(isPresented: Binding(get: { !hub.importItems.isEmpty || !hub.unpairedPatches.isEmpty }, set: { if !$0 { hub.importItems = []; hub.unpairedPatches = [] } })) {
             ImportSheet(hub: hub)
         }
     }

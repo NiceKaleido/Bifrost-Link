@@ -17,7 +17,11 @@ struct LayoutSpec: Equatable {
     var bottom: CGSize?
 
     init(settings: LinkSettings, top: CGSize?, bottom: CGSize?) {
-        layout = settings.layout
+        switch settings.detachedRole {
+        case .bottom: layout = .topOnly
+        case .top: layout = .bottomOnly
+        case nil: layout = settings.layout
+        }
         swapped = settings.swapped
         overlayX = settings.overlayX
         overlayY = settings.overlayY

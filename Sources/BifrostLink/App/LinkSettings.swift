@@ -97,7 +97,34 @@ final class LinkSettings: ObservableObject {
     @Published var saveBackupFolder: String { didSet { defaults.set(saveBackupFolder, forKey: "saveBackupFolder") } }
     @Published var autoSaveBackup: Bool { didSet { defaults.set(autoSaveBackup, forKey: "autoSaveBackup") } }
     @Published var saveBackupKeep: Int { didSet { defaults.set(saveBackupKeep, forKey: "saveBackupKeep") } }
+    @Published var customSaveFolders: [CustomSaveFolder] { didSet { defaults.set(try? JSONEncoder().encode(customSaveFolders), forKey: "customSaveFolders") } }
+    @Published var excludedSaveSources: [String] { didSet { defaults.set(excludedSaveSources, forKey: "excludedSaveSources") } }
+
+    func addCustomSaveFolder(_ path: String, name: String? = nil) {
+        let clean = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+        guard !clean.isEmpty, !customSaveFolders.contains(where: { $0.path == clean }) else { return }
+        let fallback = (clean as NSString).lastPathComponent
+        let label = name?.trimmingCharacters(in: .whitespaces).isEmpty == false ? name! : fallback
+        customSaveFolders.append(CustomSaveFolder(name: label, path: clean))
+    }
+
+    func removeCustomSaveFolder(_ path: String) {
+        customSaveFolders.removeAll { $0.path == path }
+        excludedSaveSources.removeAll { $0 == path }
+    }
+
+    func isSaveSourceIncluded(_ key: String) -> Bool { !excludedSaveSources.contains(key) }
+
+    func setSaveSource(_ key: String, included: Bool) {
+        excludedSaveSources.removeAll { $0 == key }
+        if !included { excludedSaveSources.append(key) }
+    }
     @Published var fullscreenControls: Bool { didSet { defaults.set(fullscreenControls, forKey: "fullscreenControls") } }
+    @Published var detachedScreen: String { didSet { defaults.set(detachedScreen, forKey: "detachedScreen") } }
+    var detachedRole: ScreenRole? { ScreenRole(rawValue: detachedScreen) }
+    @Published var thorRatedFirst: Bool { didSet { defaults.set(thorRatedFirst, forKey: "thorRatedFirst") } }
+    @Published var checkPortUpdates: Bool { didSet { defaults.set(checkPortUpdates, forKey: "checkPortUpdates") } }
+    @Published var macKeyboardTyping: Bool { didSet { defaults.set(macKeyboardTyping, forKey: "macKeyboardTyping") } }
     @Published var quietFullscreen: Bool { didSet { defaults.set(quietFullscreen, forKey: "quietFullscreen") } }
     @Published var downloadFolder: String { didSet { defaults.set(downloadFolder, forKey: "downloadFolder") } }
 
@@ -157,8 +184,20 @@ final class LinkSettings: ObservableObject {
         saveBackupFolder = value("saveBackupFolder", home.appendingPathComponent("Library/Application Support/Bifrost Link/Saves").path)
         autoSaveBackup = value("autoSaveBackup", true)
         saveBackupKeep = value("saveBackupKeep", 10)
+        customSaveFolders = d.data(forKey: "customSaveFolders").flatMap { try? JSONDecoder().decode([CustomSaveFolder].self, from: $0) } ?? []
+        excludedSaveSources = value("excludedSaveSources", [String]())
         fullscreenControls = value("fullscreenControls", true)
         quietFullscreen = value("quietFullscreen", true)
+        macKeyboardTyping = value("macKeyboardTyping", true)
+        checkPortUpdates = value("checkPortUpdates", true)
+        thorRatedFirst = value("thorRatedFirst", true)
+        detachedScreen = value("detachedScreen", "")
         downloadFolder = value("downloadFolder", home.appendingPathComponent("Downloads").path)
     }
+}
+
+struct CustomSaveFolder: Codable, Identifiable, Hashable {
+    var name: String
+    var path: String
+    var id: String { path }
 }

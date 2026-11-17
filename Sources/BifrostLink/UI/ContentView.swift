@@ -6,7 +6,7 @@ struct ContentView: View {
     @State private var showFiles = false
     @State private var showAudio = false
     @State private var isFullScreen = false
-    @AppStorage("sidePanelWidth") private var panelWidth: Double = 380
+    @AppStorage("sidePanelWidth") private var panelWidth: Double = 470
 
     var body: some View {
         ZStack {
@@ -53,12 +53,19 @@ struct ContentView: View {
         .navigationTitle(manager.cocoon.nowPlaying?.title ?? "Bifrost Link")
         .frame(minWidth: 480, minHeight: 320)
         .onReceive(NotificationCenter.default.publisher(for: .bifrostToggleFiles)) { _ in showFiles.toggle() }
+        .onReceive(NotificationCenter.default.publisher(for: .bifrostShowTab)) { note in
+            if let tab = note.object as? String { UserDefaults.standard.set(tab, forKey: "inspectorTab") }
+            showFiles = true
+        }
         .onChange(of: isFullScreen) { _, full in
             if full && !settings.quietFullscreen { manager.showToast("arrow.down.right.and.arrow.up.left", settings.fullscreenControls ? "Move to the top edge for controls · ⌘F to leave" : "Press ⌘F to leave full screen") }
         }
         .onChange(of: manager.state) { _, state in
             if state != .linked { showFiles = false }
+            DetachedScreenWindow.shared.sync(manager: manager, settings: settings)
         }
+        .onChange(of: settings.detachedScreen) { _, _ in DetachedScreenWindow.shared.sync(manager: manager, settings: settings) }
+        .onChange(of: manager.screens.count) { _, _ in DetachedScreenWindow.shared.sync(manager: manager, settings: settings) }
     }
 
     private var linked: Bool { manager.state == .linked }
@@ -88,6 +95,11 @@ struct ContentView: View {
                 Image(systemName: toast.symbol).foregroundStyle(Theme.bifrost)
                 Text(toast.message).font(.callout.weight(.medium))
                 if let url = toast.url {
+                    if toast.editable {
+                        Button("Edit") { ClipEditorWindow.open(url) }
+                            .buttonStyle(.borderless)
+                            .font(.callout.weight(.semibold))
+                    }
                     Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                         .buttonStyle(.borderless)
                         .font(.callout.weight(.semibold))
@@ -236,13 +248,33 @@ struct LayoutControls: View {
 
     var body: some View {
         Menu {
-            Picker("Layout", selection: $settings.layout) {
-                ForEach(ScreenLayout.allCases) { layout in
-                    Label(layout.title, systemImage: layout.symbol).tag(layout)
+            if let detached = settings.detachedRole {
+                Section("The \(detached.title.lowercased()) is in its own window") {
+                    Button("Bring the \(detached.title) Back") { settings.detachedScreen = "" }
+                    Menu("Move Its Window to") {
+                        ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { _, screen in
+                            Button(screen.localizedName) { DetachedScreenWindow.shared.move(to: screen, fullScreen: false) }
+                            Button("\(screen.localizedName), Full Screen") { DetachedScreenWindow.shared.move(to: screen, fullScreen: true) }
+                        }
+                    }
+                }
+            } else {
+                Picker("Layout", selection: $settings.layout) {
+                    ForEach(ScreenLayout.allCases) { layout in
+                        Label(layout.title, systemImage: layout.symbol).tag(layout)
+                    }
+                }
+                .pickerStyle(.inline)
+                Toggle("Swap Screens", isOn: $settings.swapped)
+                Section("Controls") {
+                    Button(cocoon.nowPlaying.map { "Controls for \($0.title)…" } ?? "Controls…") { ControlsEditorWindow.open(manager: manager) }
+                    Button(manager.keyboardPad ? "Keyboard Types Again" : "Keyboard Plays as Controller") { manager.toggleKeyboardPad() }
+                }
+                Section("Separate windows") {
+                    Button("Open Bottom Screen in Its Own Window") { settings.detachedScreen = ScreenRole.bottom.rawValue }
+                    Button("Open Top Screen in Its Own Window") { settings.detachedScreen = ScreenRole.top.rawValue }
                 }
             }
-            .pickerStyle(.inline)
-            Toggle("Swap Screens", isOn: $settings.swapped)
             if let playing = cocoon.nowPlaying {
                 let noun = playing.isApp ? "App" : "Game"
                 Section("\(playing.title)") {
@@ -258,7 +290,11 @@ struct LayoutControls: View {
                 }
             }
         } label: {
-            Label("Layout: \(settings.layout.title)", systemImage: settings.layout.symbol)
+            if let detached = settings.detachedRole {
+                Label("Layout: \(detached.shortTitle) in own window", systemImage: "macwindow.on.rectangle")
+            } else {
+                Label("Layout: \(settings.layout.title)", systemImage: settings.layout.symbol)
+            }
         }
         .menuIndicator(.visible)
         .fixedSize()
@@ -336,6 +372,11 @@ struct DeviceControls: View {
                 Button(manager.panelsOn ? "Turn Thor Screens Off" : "Turn Thor Screens On") { manager.togglePanels() }
                 Button("Rotate") { manager.rotate() }
                 Button("Show Notifications") { manager.expandNotifications() }
+            }
+            Section("Games") {
+                Button(manager.ports.updates.isEmpty ? "Ports" : "Ports (\(manager.ports.updates.count) updates)") { NotificationCenter.default.post(name: .bifrostShowTab, object: "ports") }
+                Button("Play Time") { NotificationCenter.default.post(name: .bifrostShowTab, object: "playtime") }
+                Button("Controls…") { ControlsEditorWindow.open(manager: manager) }
             }
         } label: {
             Label("More", systemImage: "ellipsis.circle")
@@ -431,6 +472,7 @@ struct FullscreenBar: View {
 
 extension Notification.Name {
     static let bifrostToggleFiles = Notification.Name("bifrostToggleFiles")
+    static let bifrostShowTab = Notification.Name("bifrostShowTab")
     static let bifrostFitWindow = Notification.Name("bifrostFitWindow")
 }
 
@@ -449,6 +491,7 @@ struct Cluster<Content: View>: View {
 }
 
 struct SidePanel<Content: View>: View {
+    static var minimumWidth: Double { 430 }
     @Binding var width: Double
     @ViewBuilder var content: Content
     @State private var dragStart: Double?
@@ -468,12 +511,12 @@ struct SidePanel<Content: View>: View {
                         .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
                             .onChanged { value in
                                 if dragStart == nil { dragStart = width }
-                                width = min(640, max(320, (dragStart ?? width) - value.translation.width))
+                                width = min(760, max(SidePanel<Content>.minimumWidth, (dragStart ?? width) - value.translation.width))
                             }
                             .onEnded { _ in dragStart = nil })
                 }
             content
-                .frame(width: width)
+                .frame(width: max(Self.minimumWidth, width))
                 .frame(maxHeight: .infinity)
         }
         .background(.regularMaterial)

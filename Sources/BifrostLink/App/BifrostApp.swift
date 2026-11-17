@@ -146,6 +146,26 @@ struct BifrostApp: App {
                 Button("Save Replay") { manager.saveReplay() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
                     .disabled(!settings.replayEnabled)
+                Button("Make a Clip…") {
+                    if let last = manager.lastCapture, FileManager.default.fileExists(atPath: last.path) {
+                        ClipEditorWindow.open(last)
+                    } else {
+                        ClipEditorWindow.chooseAndOpen(startingIn: URL(fileURLWithPath: settings.recordingFolder))
+                    }
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                Button("Make a Clip From File…") {
+                    ClipEditorWindow.chooseAndOpen(startingIn: manager.lastCapture?.deletingLastPathComponent() ?? URL(fileURLWithPath: settings.recordingFolder))
+                }
+                Divider()
+                Button(manager.keyboardPad ? "Keyboard Types Again" : "Keyboard Plays as Controller") { manager.toggleKeyboardPad() }
+                    .keyboardShortcut("k", modifiers: [.command, .control])
+                    .disabled(manager.state != .linked)
+                Button("Controls…") { ControlsEditorWindow.open(manager: manager) }
+                Button("Ports") { NotificationCenter.default.post(name: .bifrostShowTab, object: "ports") }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
+                Button("Play Time") { NotificationCenter.default.post(name: .bifrostShowTab, object: "playtime") }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Files") { NotificationCenter.default.post(name: .bifrostToggleFiles, object: nil) }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
                 Divider()

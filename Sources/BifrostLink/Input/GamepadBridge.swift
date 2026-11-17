@@ -77,6 +77,12 @@ final class GamepadBridge: @unchecked Sendable {
         lock.unlock()
         activeRumblers.forEach { $0.stop() }
         if sendDestroy { ids.forEach { control?.uhidDestroy(id: $0) } }
+        if keyboardActive {
+            if sendDestroy { control?.uhidDestroy(id: Self.keyboardSlot) }
+            keyboardActive = false
+            decayTimer?.invalidate()
+            decayTimer = nil
+        }
         control = nil
         publish()
     }
@@ -135,7 +141,127 @@ final class GamepadBridge: @unchecked Sendable {
         rumbler?.set(strong: min(1, strong), weak: min(1, weak))
     }
 
+    private let profileLock = NSLock()
+    private var profileStorage = ControllerProfile.standard
+    var profile: ControllerProfile {
+        get { profileLock.lock(); defer { profileLock.unlock() }; return profileStorage }
+        set {
+            profileLock.lock(); profileStorage = newValue; profileLock.unlock()
+            DispatchQueue.main.async { [weak self] in self?.refreshAll() }
+        }
+    }
+    var onInputs: ((Set<PadInput>) -> Void)?
+    private var lastInputs: Set<PadInput> = []
+
+    static let keyboardSlot: UInt16 = 30
+    private(set) var keyboardActive = false
+    private var keysDown: Set<PadInput> = []
+    private var mouseX: Float = 0, mouseY: Float = 0
+    private var decayTimer: Timer?
+
+    private func refreshAll() {
+        lock.lock()
+        let active = controllers
+        lock.unlock()
+        for (id, controller) in active {
+            if let pad = controller.extendedGamepad { send(pad, id: id) }
+        }
+        if keyboardActive { sendKeyboard() }
+    }
+
     private func send(_ pad: GCExtendedGamepad, id: UInt16) {
+        let state = PadState(pad)
+        report(state.pressed)
+        control?.uhidInput(id: id, report: encode(profile.apply(state)))
+    }
+
+    private func report(_ inputs: Set<PadInput>) {
+        guard inputs != lastInputs else { return }
+        lastInputs = inputs
+        onInputs?(inputs)
+    }
+
+    func bind(_ control: ControlChannel) {
+        if self.control == nil { self.control = control }
+    }
+
+    func setKeyboardPad(_ enabled: Bool) {
+        guard enabled != keyboardActive else { return }
+        keyboardActive = enabled
+        keysDown.removeAll()
+        mouseX = 0
+        mouseY = 0
+        if enabled {
+            control?.uhidCreate(id: Self.keyboardSlot, vendorId: identity.vendorId, productId: identity.productId,
+                                name: identity.deviceName, descriptor: Self.descriptor)
+            sendKeyboard()
+            Log.write("keyboard plays as controller (uhid \(Self.keyboardSlot))")
+        } else {
+            decayTimer?.invalidate()
+            decayTimer = nil
+            control?.uhidDestroy(id: Self.keyboardSlot)
+            Log.write("keyboard back to typing")
+        }
+    }
+
+    func keyboardEvent(keyCode: UInt16, down: Bool) -> Bool {
+        guard keyboardActive, let input = profile.keyInput(keyCode) else { return false }
+        if down { keysDown.insert(input) } else { keysDown.remove(input) }
+        sendKeyboard()
+        return true
+    }
+
+    func mouseButton(right: Bool, down: Bool) -> Bool {
+        let p = profile
+        guard keyboardActive, p.mouse != .off, let raw = right ? p.rightClick : p.leftClick, let input = PadInput(rawValue: raw) else { return false }
+        if down { keysDown.insert(input) } else { keysDown.remove(input) }
+        sendKeyboard()
+        return true
+    }
+
+    func mouseMoved(dx: CGFloat, dy: CGFloat) {
+        let p = profile
+        guard keyboardActive, p.mouse != .off else { return }
+        let gain = Float(0.06 * p.mouseSensitivity)
+        mouseX = max(-1, min(1, mouseX * 0.5 + Float(dx) * gain))
+        mouseY = max(-1, min(1, mouseY * 0.5 - Float(dy) * gain))
+        sendKeyboard()
+        if decayTimer == nil {
+            decayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.mouseX *= 0.7
+                self.mouseY *= 0.7
+                if abs(self.mouseX) < 0.02 && abs(self.mouseY) < 0.02 {
+                    self.mouseX = 0
+                    self.mouseY = 0
+                    self.decayTimer?.invalidate()
+                    self.decayTimer = nil
+                }
+                self.sendKeyboard()
+            }
+        }
+    }
+
+    private func sendKeyboard() {
+        guard keyboardActive else { return }
+        var state = PadState()
+        state.pressed = keysDown
+        let p = profile
+        switch p.mouse {
+        case .rightStick:
+            state.rx = mouseX
+            state.ry = mouseY
+        case .leftStick:
+            state.lx = mouseX
+            state.ly = mouseY
+        case .off:
+            break
+        }
+        report(keysDown)
+        control?.uhidInput(id: Self.keyboardSlot, report: encode(p.apply(state)))
+    }
+
+    private func encode(_ state: PadState) -> Data {
         func axis(_ v: Float) -> UInt16 {
             let clamped = max(-1, min(1, v))
             return UInt16(clamping: Int((clamped + 1) * 32767.5))
@@ -143,41 +269,48 @@ final class GamepadBridge: @unchecked Sendable {
         func trigger(_ v: Float) -> UInt16 {
             UInt16(clamping: Int(max(0, min(1, v)) * 1023))
         }
+        let p = state.pressed
         var buttons: UInt16 = 0
         let nintendo = identity == .odin && nintendoLayout
-        if pad.buttonA.isPressed { buttons |= 1 << (nintendo ? 1 : 0) }
-        if pad.buttonB.isPressed { buttons |= 1 << (nintendo ? 0 : 1) }
-        if pad.buttonX.isPressed { buttons |= 1 << (nintendo ? 4 : 3) }
-        if pad.buttonY.isPressed { buttons |= 1 << (nintendo ? 3 : 4) }
-        if pad.leftShoulder.isPressed { buttons |= 1 << 6 }
-        if pad.rightShoulder.isPressed { buttons |= 1 << 7 }
-        if pad.buttonMenu.isPressed { buttons |= 1 << 11 }
-        if pad.buttonHome?.isPressed == true { buttons |= 1 << 12 }
-        if pad.leftThumbstickButton?.isPressed == true { buttons |= 1 << 13 }
-        if pad.rightThumbstickButton?.isPressed == true { buttons |= 1 << 14 }
-        let viewPressed = pad.buttonOptions?.isPressed == true
-        if viewPressed && identity == .odin { buttons |= 1 << 10 }
-        let back: UInt8 = viewPressed && identity == .xbox ? 1 : 0
+        if p.contains(.a) { buttons |= 1 << (nintendo ? 1 : 0) }
+        if p.contains(.b) { buttons |= 1 << (nintendo ? 0 : 1) }
+        if p.contains(.x) { buttons |= 1 << (nintendo ? 4 : 3) }
+        if p.contains(.y) { buttons |= 1 << (nintendo ? 3 : 4) }
+        if p.contains(.l1) { buttons |= 1 << 6 }
+        if p.contains(.r1) { buttons |= 1 << 7 }
+        if p.contains(.start) { buttons |= 1 << 11 }
+        if p.contains(.home) { buttons |= 1 << 12 }
+        if p.contains(.l3) { buttons |= 1 << 13 }
+        if p.contains(.r3) { buttons |= 1 << 14 }
+        let select = p.contains(.select)
+        if select && identity == .odin { buttons |= 1 << 10 }
+        let back: UInt8 = select && identity == .xbox ? 1 : 0
 
-        let up = pad.dpad.up.isPressed, down = pad.dpad.down.isPressed
-        let left = pad.dpad.left.isPressed, right = pad.dpad.right.isPressed
+        let up = p.contains(.dpadUp), down = p.contains(.dpadDown)
+        let left = p.contains(.dpadLeft), right = p.contains(.dpadRight)
         var hat: UInt8 = 0
         if up { hat = left ? 8 : (right ? 2 : 1) }
         else if down { hat = left ? 6 : (right ? 4 : 5) }
         else if left { hat = 7 }
         else if right { hat = 3 }
 
+        func dir(_ plus: PadInput, _ minus: PadInput) -> Float { (p.contains(plus) ? 1 : 0) - (p.contains(minus) ? 1 : 0) }
+        let lx = state.lx + dir(.lsRight, .lsLeft), ly = state.ly + dir(.lsUp, .lsDown)
+        let rx = state.rx + dir(.rsRight, .rsLeft), ry = state.ry + dir(.rsUp, .rsDown)
+        let l2 = p.contains(.l2) ? 1 : state.l2
+        let r2 = p.contains(.r2) ? 1 : state.r2
+
         var report = Data()
-        report.appendLE(axis(pad.leftThumbstick.xAxis.value))
-        report.appendLE(axis(-pad.leftThumbstick.yAxis.value))
-        report.appendLE(axis(pad.rightThumbstick.xAxis.value))
-        report.appendLE(axis(-pad.rightThumbstick.yAxis.value))
-        report.appendLE(trigger(pad.leftTrigger.value))
-        report.appendLE(trigger(pad.rightTrigger.value))
+        report.appendLE(axis(lx))
+        report.appendLE(axis(-ly))
+        report.appendLE(axis(rx))
+        report.appendLE(axis(-ry))
+        report.appendLE(trigger(l2))
+        report.appendLE(trigger(r2))
         report.appendLE(buttons)
         report.append(back)
         report.append(hat)
-        control?.uhidInput(id: id, report: report)
+        return report
     }
 }
 

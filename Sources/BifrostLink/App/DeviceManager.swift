@@ -18,6 +18,7 @@ struct Toast: Identifiable, Equatable {
     let symbol: String
     let message: String
     var url: URL?
+    var editable = false
 }
 
 struct DisplayInfo {
@@ -46,6 +47,7 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var gamepads: [String] = []
     @Published private(set) var screenApps: [AudioChannel: [String]] = [:]
     @Published var toast: Toast?
+    var lastCapture: URL?
     @Published var flash = false
 
     let settings = LinkSettings.shared
@@ -54,12 +56,14 @@ final class DeviceManager: ObservableObject {
     let backups = SaveBackupService()
     let cleanup = CleanupService()
     let cocoon = CocoonBridge()
+    let stats = PlayStats()
     let updater = EmulatorUpdater()
+    let ports = PortCatalog()
     private var homeProfile: LayoutProfile?
     let audio = AudioOutput()
     private var router: AudioRouter?
     private var power: PowerGuard?
-    private let gamepad = GamepadBridge()
+    let gamepad = GamepadBridge()
     private var pollTask: Task<Void, Never>?
     private var batteryTask: Task<Void, Never>?
     private var ambientTask: Task<Void, Never>?
@@ -88,11 +92,16 @@ final class DeviceManager: ObservableObject {
         cleanup.backups = backups
         let toastHandler: (String, String) -> Void = { [weak self] symbol, message in self?.showToast(symbol, message) }
         emulation.toast = toastHandler
+        ports.toast = toastHandler
+        ports.backups = backups
+        ports.romFolders = { [weak self] in self?.emulation.folders.mapValues(\.path) ?? [:] }
+        stats.bridge = cocoon
+        cocoon.onSessionEnded = { [weak self] playing, ended in self?.stats.record(playing, ended: ended) }
         backups.toast = toastHandler
         cleanup.toast = toastHandler
         updater.toast = toastHandler
         backups.loadSnapshots()
-        cocoon.$nowPlaying.removeDuplicates { $0?.file == $1?.file }.dropFirst().sink { [weak self] playing in
+        cocoon.$nowPlaying.removeDuplicates { $0?.file == $1?.file && $0?.package == $1?.package }.dropFirst().sink { [weak self] playing in
             DispatchQueue.main.async { self?.nowPlayingChanged(playing) }
         }.store(in: &cancellables)
         gamepad.onChange = { [weak self] names in
@@ -110,9 +119,13 @@ final class DeviceManager: ObservableObject {
             self?.router?.reconfigure(perScreen: per, playOnDevice: dup)
             DispatchQueue.main.async { self?.applyThorVolume() }
         }.store(in: &cancellables)
+        settings.$macKeyboardTyping.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.applyThorKeyboard() }
+        }.store(in: &cancellables)
         settings.$gamepadEnabled.dropFirst().sink { [weak self] enabled in
             guard let self else { return }
             if enabled, let control = self.screen(.top)?.control { self.gamepad.attach(control) } else { self.gamepad.detach() }
+            self.syncKeyboardPad()
         }.store(in: &cancellables)
         settings.$cinemaMode.sink { [weak self] on in
             self?.updateAmbient(on)
@@ -137,6 +150,7 @@ final class DeviceManager: ObservableObject {
             self.gamepad.identity = GamepadBridge.Identity(rawValue: value) ?? .odin
             if self.state == .linked, self.settings.gamepadEnabled, let control = self.screen(.top)?.control {
                 self.gamepad.attach(control)
+                self.syncKeyboardPad()
             }
         }.store(in: &cancellables)
         settings.$rumbleEnabled.sink { [weak self] on in
@@ -251,7 +265,7 @@ final class DeviceManager: ObservableObject {
         guard let main = displays.first(where: { $0.id == 0 }) ?? displays.first else { throw ADBError.failed("No displays found on the device") }
         let secondary = displays.first { $0.id != main.id }
 
-        var cleanupParts = [Self.volumeRestoreShell]
+        var cleanupParts = [Self.volumeRestoreShell, Self.keyboardRestoreShell]
         if settings.pauseSleepManager, let part = await pauseSleepManager(serial: serial) {
             cleanupParts.append(part)
         }
@@ -283,6 +297,7 @@ final class DeviceManager: ObservableObject {
         if settings.gamepadEnabled, let control = screen(.top)?.control {
             gamepad.attach(control)
         }
+        applyControllerProfile()
 
         let guardian = PowerGuard(serial: serial)
         guardian.setPanels = { [weak self] on in
@@ -299,16 +314,28 @@ final class DeviceManager: ObservableObject {
         backups.reset(serial: serial)
         cleanup.reset(serial: serial)
         updater.reset(serial: serial)
+        ports.reset(serial: serial)
+        updater.excludedPackages = ports.packages
         Task { [weak self] in
             guard let self else { return }
             await self.emulation.refreshFolders()
             self.cocoon.start(serial: serial, cocoonRoot: self.emulation.cocoonRoot)
+            self.stats.serial = serial
+            self.stats.cocoonRoot = self.emulation.cocoonRoot
             await self.backups.autoBackupIfDue()
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             guard self.state == .linked, self.serial == serial else { return }
             if self.emulation.lastScan == nil && !self.emulation.scanning { await self.emulation.scan() }
             guard self.state == .linked, self.serial == serial else { return }
             if self.cleanup.usage.isEmpty && !self.cleanup.scanning { await self.cleanup.scan() }
+            guard self.state == .linked, self.serial == serial else { return }
+            await self.stats.refreshCocoon()
+            guard self.state == .linked, self.serial == serial, self.settings.checkPortUpdates else { return }
+            await self.ports.refresh()
+            self.updater.excludedPackages = self.ports.packages
+            await self.ports.detectInstalled()
+            let count = self.ports.updates.count
+            if count > 0 { self.showToast("arrow.down.app", count == 1 ? "An update for \(self.ports.updates[0].port.name) is ready in Ports" : "\(count) port updates are ready in Ports") }
         }
         startBatteryPolling(serial: serial)
         updateAmbient(settings.cinemaMode)
@@ -317,6 +344,7 @@ final class DeviceManager: ObservableObject {
             self.updateReplay()
             self.updateStatsLoop()
             self.applyThorVolume()
+            self.applyThorKeyboard()
         }
     }
 
@@ -518,6 +546,8 @@ final class DeviceManager: ObservableObject {
         audio.removeTapConsumer("replay")
         replayBuffer?.clear()
         replayBuffer = nil
+        padReleasePointer()
+        keyboardPad = false
         gamepad.detach(sendDestroy: devicePresent)
         router?.stop()
         router = nil
@@ -538,10 +568,12 @@ final class DeviceManager: ObservableObject {
         }
         files.reset(serial: nil)
         cocoon.stop()
+        stats.serial = nil
         emulation.reset(serial: nil)
         backups.reset(serial: nil)
         cleanup.reset(serial: nil)
         updater.reset(serial: nil)
+        ports.reset(serial: nil)
         homeProfile = nil
         battery = nil
         screenApps = [:]
@@ -552,6 +584,20 @@ final class DeviceManager: ObservableObject {
 
     private static let volumeMarker = "/data/local/tmp/bifrost-volume"
     private static let volumeRestoreShell = "[ -f \(volumeMarker) ] && cmd media_session volume --stream 3 --set $(cat \(volumeMarker)) >/dev/null 2>&1; rm -f \(volumeMarker)"
+
+    static let cocoonKeyboard = "rip.moth.cocoonshell/.ui.keyboard.CocoonInputMethodService"
+    private static let keyboardMarker = "/data/local/tmp/bifrost-ime"
+    private static let keyboardRestoreShell = "[ -f \(keyboardMarker) ] && { ime enable $(cat \(keyboardMarker)); ime set $(cat \(keyboardMarker)); } >/dev/null 2>&1; rm -f \(keyboardMarker)"
+    private static let keyboardReleaseShell = "k=$(settings get secure default_input_method); [ \"$k\" = \"\(cocoonKeyboard)\" ] && { echo \"$k\" > \(keyboardMarker); ime disable \"$k\" >/dev/null 2>&1; }; true"
+
+    func applyThorKeyboard() {
+        guard let serial, state == .linked else { return }
+        let release = settings.macKeyboardTyping
+        Task {
+            _ = try? await ADB.shared.shell(release ? Self.keyboardReleaseShell : Self.keyboardRestoreShell, serial: serial, timeout: 10)
+            Log.write(release ? "cocoon keyboard released for mac typing" : "thor keyboard restored")
+        }
+    }
 
     private struct RadioState: Codable {
         var wifi: Bool
@@ -709,8 +755,9 @@ final class DeviceManager: ObservableObject {
         screen(.top)?.control?.expandNotifications()
     }
 
-    func showToast(_ symbol: String, _ message: String, url: URL? = nil) {
-        let t = Toast(symbol: symbol, message: message, url: url)
+    func showToast(_ symbol: String, _ message: String, url: URL? = nil, editable: Bool = false) {
+        let t = Toast(symbol: symbol, message: message, url: url, editable: editable)
+        if editable, let url { lastCapture = url }
         toast = t
         Task {
             try? await Task.sleep(nanoseconds: 3_500_000_000)
@@ -730,6 +777,7 @@ final class DeviceManager: ObservableObject {
     }
 
     private func nowPlayingChanged(_ playing: NowPlaying?) {
+        applyControllerProfile()
         if let playing {
             if homeProfile == nil { homeProfile = LayoutProfile(settings: settings) }
             if let profile = LayoutProfiles.get(LayoutProfiles.gameKey(playing)) ?? (playing.isApp ? nil : LayoutProfiles.get(LayoutProfiles.systemKey(playing.system))) {
@@ -747,6 +795,41 @@ final class DeviceManager: ObservableObject {
     }
 
     enum ProfileScope { case game, system }
+
+    @Published private(set) var keyboardPad = false
+    @Published private(set) var controllerScope = ControllerProfiles.everyone
+    private(set) var pointerCaptured = false
+    private var resignObserver: NSObjectProtocol?
+
+    func applyControllerProfile() {
+        let resolved = ControllerProfiles.resolve(cocoon.nowPlaying)
+        gamepad.profile = resolved.profile
+        controllerScope = resolved.scope
+    }
+
+    func toggleKeyboardPad() {
+        guard state == .linked else { return }
+        keyboardPad.toggle()
+        syncKeyboardPad()
+        if keyboardPad {
+            let mouse = gamepad.profile.mouse != .off
+            showToast("keyboard", mouse ? "Keyboard plays as controller. Click the screen to use the mouse as \(gamepad.profile.mouse == .rightStick ? "camera" : "stick"), Esc releases it · ⌃⌘K to type again" : "Keyboard plays as controller · ⌃⌘K to type again")
+        } else {
+            padReleasePointer()
+            showToast("keyboard", "Keyboard types again")
+        }
+    }
+
+    func syncKeyboardPad() {
+        guard keyboardPad, let control = screen(.top)?.control else {
+            keyboardPad = false
+            gamepad.setKeyboardPad(false)
+            return
+        }
+        gamepad.bind(control)
+        gamepad.setKeyboardPad(true)
+        ScreenView.padRouter = self
+    }
 
     func rememberLayout(_ scope: ProfileScope) {
         guard let playing = cocoon.nowPlaying else { return }
@@ -882,7 +965,7 @@ final class DeviceManager: ObservableObject {
         if urls.isEmpty {
             showToast("exclamationmark.triangle", "Recording failed")
         } else {
-            showToast("record.circle", urls.count == 1 ? "Recording saved" : "\(urls.count) recordings saved", url: urls.first)
+            showToast("record.circle", urls.count == 1 ? "Recording saved" : "\(urls.count) recordings saved", url: urls.first, editable: true)
         }
     }
 
@@ -934,7 +1017,7 @@ final class DeviceManager: ObservableObject {
                 if result.isEmpty {
                     self.showToast("exclamationmark.triangle", "Replay could not be saved")
                 } else {
-                    self.showToast("clock.arrow.circlepath", result.count == 1 ? "Replay saved" : "\(result.count) replays saved", url: result.first)
+                    self.showToast("clock.arrow.circlepath", result.count == 1 ? "Replay saved" : "\(result.count) replays saved", url: result.first, editable: true)
                 }
             }
         }
@@ -965,5 +1048,41 @@ final class DeviceManager: ObservableObject {
                 self.audioLatencyMs = self.router == nil ? nil : Double(frames) / AudioOutput.sampleRate * 1000
             }
         }
+    }
+}
+
+extension DeviceManager: PadRouter {
+    var padActive: Bool { keyboardPad && state == .linked }
+    var padUsesMouse: Bool { gamepad.profile.mouse != .off }
+
+    func padKey(_ keyCode: UInt16, down: Bool) -> Bool {
+        gamepad.keyboardEvent(keyCode: keyCode, down: down)
+    }
+
+    func padCapturePointer() {
+        guard !pointerCaptured, NSApp.isActive else { return }
+        pointerCaptured = true
+        CGAssociateMouseAndMouseCursorPosition(0)
+        NSCursor.hide()
+        resignObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.padReleasePointer() }
+        }
+    }
+
+    func padReleasePointer() {
+        guard pointerCaptured else { return }
+        pointerCaptured = false
+        CGAssociateMouseAndMouseCursorPosition(1)
+        NSCursor.unhide()
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
+    }
+
+    func padMouse(dx: CGFloat, dy: CGFloat) {
+        gamepad.mouseMoved(dx: dx, dy: dy)
+    }
+
+    func padClick(right: Bool, down: Bool) {
+        _ = gamepad.mouseButton(right: right, down: down)
     }
 }
