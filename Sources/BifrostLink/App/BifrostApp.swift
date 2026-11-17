@@ -7,7 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.write("launch \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")")
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        Task { @MainActor in DeviceManager.shared.boot() }
+        Task { @MainActor in
+            DeviceManager.shared.boot()
+            SelfUpdater.shared.checkOnLaunch()
+        }
         if AudioStream.debug {
             DistributedNotificationCenter.default().addObserver(forName: Notification.Name("eu.nicekaleido.bifrostlink.command"), object: nil, queue: .main) { note in
                 let command = note.object as? String ?? ""
@@ -22,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case "layoutSideBySide": LinkSettings.shared.layout = .sideBySide
                     case "layoutStacked": LinkSettings.shared.layout = .stacked
                     case "screenshot": manager.screenshot()
+                    case "quickSave": manager.quickState(.save)
+                    case "quickLoad": manager.quickState(.load)
                     case "libraryScan": Task { await manager.emulation.scan(); Log.write("library: \(manager.emulation.space.count) systems, \(manager.emulation.unsorted.count) unsorted, \(manager.emulation.orphanMedia.count) orphan media (\(manager.emulation.orphanMedia.reduce(0) { $0 + $1.size } / 1_048_576) MB), \(manager.emulation.orphanEntries.count) orphan entries, \(manager.emulation.bios.count) bios rows, \(manager.emulation.shrinkCandidates.count) shrink") }
                     case "cleanupScan": Task { await manager.cleanup.scan(); Log.write("cleanup: " + manager.cleanup.usage.map { "\($0.profile.name) \($0.byCategory.map { "\($0.key.rawValue)=\($0.value / 1_048_576)MB" }.sorted().joined(separator: " "))" }.joined(separator: " | ")) }
                     case _ where command.hasPrefix("import:"):
@@ -55,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !LinkSettings.shared.showMenuBar }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task { @MainActor in
@@ -71,6 +76,7 @@ struct BifrostApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var manager = DeviceManager.shared
     @StateObject private var settings = LinkSettings.shared
+    @AppStorage("showMenuBar") private var showMenuBar = true
 
     var body: some Scene {
         Window("Bifrost Link", id: "main") {
@@ -82,6 +88,9 @@ struct BifrostApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Task { await SelfUpdater.shared.check(manual: true) } }
+            }
             CommandMenu("View Layout") {
                 ForEach(ScreenLayout.allCases) { layout in
                     Button(layout.title) { settings.layout = layout }
@@ -133,7 +142,7 @@ struct BifrostApp: App {
                     .keyboardShortcut("w", modifiers: [.command, .control])
                 Button(settings.muted ? "Unmute" : "Mute") { manager.toggleMute() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
-                Button("Toggle Thor Screens") { manager.togglePanels() }
+                Button("Toggle \(DeviceInfo.name) Screens") { manager.togglePanels() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                 Button(manager.mirroringPaused ? "Resume Mirroring" : "Pause Mirroring") { manager.toggleMirroring() }
                     .keyboardShortcut("p", modifiers: [.command, .control])
@@ -146,6 +155,12 @@ struct BifrostApp: App {
                 Button("Save Replay") { manager.saveReplay() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
                     .disabled(!settings.replayEnabled)
+                Button("Quick Save") { manager.quickState(.save) }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .disabled(manager.state != .linked)
+                Button("Quick Load") { manager.quickState(.load) }
+                    .keyboardShortcut("l", modifiers: [.command, .control])
+                    .disabled(manager.state != .linked)
                 Button("Make a Clip…") {
                     if let last = manager.lastCapture, FileManager.default.fileExists(atPath: last.path) {
                         ClipEditorWindow.open(last)
@@ -178,6 +193,10 @@ struct BifrostApp: App {
                 Button("Unlink") { manager.disconnect() }
                     .disabled(manager.state != .linked)
             }
+        }
+
+        MenuBarExtra("Bifrost Link", systemImage: "link.circle", isInserted: $showMenuBar) {
+            MenuBarContent(manager: manager, settings: settings, cocoon: manager.cocoon)
         }
 
         Settings {

@@ -63,6 +63,11 @@ struct ContentView: View {
         .onChange(of: manager.state) { _, state in
             if state != .linked { showFiles = false }
             DetachedScreenWindow.shared.sync(manager: manager, settings: settings)
+            if state == .linked && settings.fullscreenOnLink && !isFullScreen {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.toggleFullScreen(nil)
+                }
+            }
         }
         .onChange(of: settings.detachedScreen) { _, _ in DetachedScreenWindow.shared.sync(manager: manager, settings: settings) }
         .onChange(of: manager.screens.count) { _, _ in DetachedScreenWindow.shared.sync(manager: manager, settings: settings) }
@@ -189,7 +194,7 @@ struct DevicePill: View {
                     Image(systemName: "laptopcomputer.slash")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .help("Lid closed. Bifrost keeps the Thor awake")
+                        .help("Lid closed. Bifrost keeps the \(DeviceInfo.name) awake")
                         .accessibilityLabel("Lid closed")
                 }
                 if !manager.gamepads.isEmpty {
@@ -274,6 +279,9 @@ struct LayoutControls: View {
                     Button("Open Bottom Screen in Its Own Window") { settings.detachedScreen = ScreenRole.bottom.rawValue }
                     Button("Open Top Screen in Its Own Window") { settings.detachedScreen = ScreenRole.top.rawValue }
                 }
+            }
+            if !cocoon.detected, manager.state == .linked {
+                Text("Layouts are remembered per app. With Cocoon installed, also per game.")
             }
             if let playing = cocoon.nowPlaying {
                 let noun = playing.isApp ? "App" : "Game"
@@ -367,9 +375,9 @@ struct DeviceControls: View {
                 .disabled(manager.recording)
                 Toggle("Instant Replay", isOn: $settings.replayEnabled)
             }
-            Section("Thor") {
+            Section(DeviceInfo.name) {
                 Button(manager.mirroringPaused ? "Resume Mirroring" : "Pause Mirroring") { manager.toggleMirroring() }
-                Button(manager.panelsOn ? "Turn Thor Screens Off" : "Turn Thor Screens On") { manager.togglePanels() }
+                Button(manager.panelsOn ? "Turn \(DeviceInfo.name) Screens Off" : "Turn \(DeviceInfo.name) Screens On") { manager.togglePanels() }
                 Button("Rotate") { manager.rotate() }
                 Button("Show Notifications") { manager.expandNotifications() }
             }
@@ -382,7 +390,7 @@ struct DeviceControls: View {
             Label("More", systemImage: "ellipsis.circle")
         }
         .menuIndicator(.hidden)
-        .help("Picture, recording and Thor options")
+        .help("Picture, recording and \(DeviceInfo.name) options")
 
         Button { NSApp.keyWindow?.toggleFullScreen(nil) } label: {
             Label(compact ? "Leave Full Screen" : "Full Screen", systemImage: compact ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")

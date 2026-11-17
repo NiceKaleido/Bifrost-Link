@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, library, ports, playtime, saves, cleanup
+    case files, apps, library, ports, playtime, saves, cleanup
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .files: return "Files"
+        case .apps: return "Apps"
         case .library: return "Library"
         case .ports: return "Ports"
         case .playtime: return "Play Time"
@@ -18,7 +19,8 @@ enum InspectorTab: String, CaseIterable, Identifiable {
 
     var headline: String {
         switch self {
-        case .files: return "Files on your Thor"
+        case .files: return "Files on your \(DeviceInfo.name)"
+        case .apps: return "Installed Apps"
         case .library: return "Game Library"
         case .ports: return "Native Ports"
         case .playtime: return "Play Time"
@@ -30,9 +32,10 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .files: return "Browse internal storage and the SD card, copy files both ways."
+        case .apps: return "Everything you installed, biggest first. Open, clean up, back up or remove apps."
         case .library: return "Import games, check your collection and make room."
-        case .ports: return "Android versions of classic games, rated by Thor owners."
-        case .playtime: return "How long you play, on the Thor and while docked."
+        case .ports: return "Android versions of classic games, rated by \(DeviceInfo.name) owners."
+        case .playtime: return "How long you play, on the \(DeviceInfo.name) and while docked."
         case .saves: return "Copies of your emulator saves and settings on this Mac."
         case .cleanup: return "Free up space that emulators leave behind."
         }
@@ -41,6 +44,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .files: return "folder.fill"
+        case .apps: return "square.grid.2x2.fill"
         case .library: return "books.vertical.fill"
         case .ports: return "shippingbox.fill"
         case .playtime: return "timer"
@@ -49,7 +53,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         }
     }
 
-    static let groups: [[InspectorTab]] = [[.files], [.library, .ports, .playtime], [.saves, .cleanup]]
+    static let groups: [[InspectorTab]] = [[.files, .apps], [.library, .ports, .playtime], [.saves, .cleanup]]
 }
 
 struct InspectorView: View {
@@ -67,6 +71,7 @@ struct InspectorView: View {
                 Group {
                     switch tab {
                     case .files: FileBrowserView(files: manager.files, settings: settings)
+                    case .apps: AppsPanel(apps: manager.apps)
                     case .library: LibraryView(hub: manager.emulation, files: manager.files, updater: manager.updater, ports: manager.ports)
                     case .ports: PortsPanel(catalog: manager.ports, manager: manager, settings: settings)
                     case .playtime: PlayTimeView(stats: manager.stats, cocoon: manager.cocoon)
@@ -84,6 +89,7 @@ struct InspectorView: View {
     private var headerActions: some View {
         switch tab {
         case .files: FilesHeaderActions(files: manager.files)
+        case .apps: AppsHeaderActions(apps: manager.apps)
         case .library: LibraryHeaderActions(hub: manager.emulation)
         case .ports: PortsHeaderActions(catalog: manager.ports)
         case .playtime: PlayTimeHeaderActions(stats: manager.stats)
@@ -194,6 +200,17 @@ struct FilesHeaderActions: View {
     }
 }
 
+struct AppsHeaderActions: View {
+    @ObservedObject var apps: AppManager
+
+    var body: some View {
+        Button { Task { await apps.refresh() } } label: {
+            if apps.loading { ProgressView().controlSize(.mini) } else { Label("Refresh", systemImage: "arrow.clockwise") }
+        }
+        .disabled(apps.loading || apps.serial == nil)
+    }
+}
+
 struct LibraryHeaderActions: View {
     @ObservedObject var hub: EmulationHub
 
@@ -216,12 +233,13 @@ struct PortsHeaderActions: View {
             Task {
                 await catalog.refresh(force: true)
                 await catalog.detectInstalled()
+                if catalog.libraryMatchedAt != nil { await catalog.scanLibraryMatches() }
             }
         } label: {
-            if catalog.loading || catalog.detecting { ProgressView().controlSize(.mini) } else { Label("Refresh", systemImage: "arrow.clockwise") }
+            if catalog.loading || catalog.detecting || catalog.matchingLibrary { ProgressView().controlSize(.mini) } else { Label("Refresh", systemImage: "arrow.clockwise") }
         }
         .disabled(catalog.loading || catalog.detecting)
-        .help("Load the latest catalog and check the Thor again")
+        .help("Load the latest catalog and check the \(DeviceInfo.name) again")
     }
 }
 
@@ -363,7 +381,7 @@ struct LibraryView: View {
         } message: {
             let original = hub.shrunk.reduce(0) { $0 + $1.candidate.size }
             let saved = hub.shrunk.reduce(0) { $0 + $1.saved }
-            Text("The CHD versions are on your Thor and checked. Removing the originals frees \(original.bytesText) and saves \(saved.bytesText) overall. Playlists and Cocoon entries are pointed at the new files.")
+            Text("The CHD versions are on your \(DeviceInfo.name) and checked. Removing the originals frees \(original.bytesText) and saves \(saved.bytesText) overall. Playlists and Cocoon entries are pointed at the new files.")
         }
     }
 
@@ -395,7 +413,7 @@ struct LibraryView: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.prompt = "Import"
-        panel.message = "Choose ROMs to send to the Thor"
+        panel.message = "Choose ROMs to send to the \(DeviceInfo.name)"
         if panel.runModal() == .OK { hub.prepareImport(panel.urls) }
     }
 
@@ -568,10 +586,10 @@ struct LibraryView: View {
         SectionHeader(title: "Leftover artwork", symbol: "photo.stack", trailing: hub.orphanMedia.isEmpty && hub.orphanEntries.isEmpty ? "all tidy" : mediaBytes.bytesText)
         Card {
             if hub.orphanMedia.isEmpty && hub.orphanEntries.isEmpty {
-                Label(hub.cocoonRoot == nil ? "Cocoon wasn’t found, so there’s no scraped data to check." : "Every scraped image and entry still belongs to a game on your Thor.", systemImage: "hand.thumbsup")
+                Label(hub.cocoonRoot == nil ? "This check tidies up Cocoon’s game artwork. Cocoon isn’t installed, so there’s nothing to check." : "Every scraped image and entry still belongs to a game on your \(DeviceInfo.name).", systemImage: hub.cocoonRoot == nil ? "info.circle" : "hand.thumbsup")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                Text("\(hub.orphanMedia.count) images and \(hub.orphanEntries.count) Cocoon entries belong to games that are no longer on the Thor.")
+                Text("\(hub.orphanMedia.count) images and \(hub.orphanEntries.count) Cocoon entries belong to games that are no longer on the \(DeviceInfo.name).")
                     .font(.callout)
                 DisclosureGroup(isExpanded: $showOrphans) {
                     let names = Dictionary(grouping: hub.orphanEntries, by: \.system)
@@ -613,7 +631,7 @@ struct LibraryView: View {
                 Text("Disc images become CHD, cartridge ROMs become ZIP. Each is converted on your Mac, checked, then sent back, and emulators play both directly. Multi-track games, playlists and Cocoon entries are handled for you.").font(.caption).foregroundStyle(.secondary)
                 if !hub.shrunk.isEmpty {
                     HStack {
-                        Label("\(hub.shrunk.count) original\(hub.shrunk.count == 1 ? "" : "s") still on the Thor", systemImage: "doc.on.doc").font(.caption)
+                        Label("\(hub.shrunk.count) original\(hub.shrunk.count == 1 ? "" : "s") still on the \(DeviceInfo.name)", systemImage: "doc.on.doc").font(.caption)
                         Spacer()
                         Button("Remove…") { hub.askRemoveOriginals = true }.controlSize(.small)
                     }
@@ -669,8 +687,8 @@ struct ImportSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.title3.weight(.semibold))
                 Text(hub.importItems.contains { $0.patch != nil } || !hub.unpairedPatches.isEmpty
-                     ? "Patches are applied on this Mac, then the patched game goes straight into its system’s folder on your Thor."
-                     : "Pick the system for each game. It goes straight into that system’s folder on your Thor.")
+                     ? "Patches are applied on this Mac, then the patched game goes straight into its system’s folder on your \(DeviceInfo.name)."
+                     : "Pick the system for each game. It goes straight into that system’s folder on your \(DeviceInfo.name).")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     if sending.count > 1 {
@@ -710,7 +728,7 @@ struct ImportSheet: View {
                                 }
                                 Spacer()
                                 Button("On This Mac…") { chooseLocal(for: patch) }
-                                Button("On the Thor…") { thorPickerFor = patch }
+                                Button("On the \(DeviceInfo.name)…") { thorPickerFor = patch }
                                     .disabled(hub.serial == nil)
                             }
                             .controlSize(.small)
@@ -740,7 +758,7 @@ struct ImportSheet: View {
                         .labelsHidden()
                         .frame(width: 190)
                         .disabled(item.remoteSource != nil)
-                        .help(item.remoteSource != nil ? "Goes next to the original on the Thor" : "")
+                        .help(item.remoteSource != nil ? "Goes next to the original on the \(DeviceInfo.name)" : "")
                     }
                     .padding(.vertical, 2)
                 }
@@ -815,7 +833,7 @@ struct ThorRomPicker: View {
             Text("Which game is “\(patch.lastPathComponent)” for?").font(.headline)
             TextField("Search your games", text: $query).textFieldStyle(.roundedBorder)
             if loading {
-                ProgressView("Listing games on the Thor…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("Listing games on the \(DeviceInfo.name)…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(filtered, id: \.self, selection: $selection) { path in
                     VStack(alignment: .leading, spacing: 1) {

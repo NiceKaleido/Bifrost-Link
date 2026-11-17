@@ -54,10 +54,10 @@ enum Emulators {
 
     static let all: [EmulatorProfile] = [
         EmulatorProfile(id: "retroarch", name: "RetroArch", package: "com.retroarch", paths: [
-            .saves: ["/sdcard/RetroArch/saves"],
-            .states: ["/sdcard/RetroArch/states"],
-            .junk: ["/sdcard/RetroArch/temp", "/sdcard/RetroArch/logs"],
-        ], configs: ["\(data)/com.retroarch/files/retroarch.cfg", "/sdcard/RetroArch/config"]),
+            .saves: ["\(data)/com.retroarch/files/RetroArch/saves", "/sdcard/RetroArch/saves"],
+            .states: ["\(data)/com.retroarch/files/RetroArch/states", "/sdcard/RetroArch/states"],
+            .junk: ["\(data)/com.retroarch/files/RetroArch/temp", "\(data)/com.retroarch/files/RetroArch/logs", "/sdcard/RetroArch/temp", "/sdcard/RetroArch/logs"],
+        ], configs: ["\(data)/com.retroarch/files/retroarch.cfg", "\(data)/com.retroarch/files/RetroArch/config", "/sdcard/RetroArch/config"]),
         EmulatorProfile(id: "ppsspp", name: "PPSSPP", package: "org.ppsspp.ppsspp", paths: [
             .saves: ["\(data)/org.ppsspp.ppsspp/files/PSP/SAVEDATA", "/sdcard/PSP/SAVEDATA"],
             .states: ["\(data)/org.ppsspp.ppsspp/files/PSP/PPSSPP_STATE", "/sdcard/PSP/PPSSPP_STATE"],
@@ -404,10 +404,13 @@ final class SaveBackupService: ObservableObject {
             try? FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
             let named = staged.appendingPathComponent(name)
             try? FileManager.default.copyItem(at: local, to: named)
-            _ = try? await ADB.shared.shell("mkdir -p \(ADB.quote(parent))", serial: serial, timeout: 10)
-            let result = try? await ADB.shared.run(["push", named.path, parent + "/"], serial: serial, timeout: 0)
+            let remoteStage = "/data/local/tmp/bifrost-restore-\(UUID().uuidString.prefix(8))"
+            let pushed = try? await ADB.shared.run(["push", named.path, remoteStage + "/"], serial: serial, timeout: 0)
             try? FileManager.default.removeItem(at: staged)
-            if result?.ok == true { restored += 1 }
+            let copy = "mkdir -p \(ADB.quote(parent)) && cp -r \(ADB.quote(remoteStage + "/" + name)) \(ADB.quote(parent + "/")) && chmod -R ug+rw,o+rw \(ADB.quote(parent + "/" + name)) && echo restored; rm -rf \(ADB.quote(remoteStage))"
+            let out = pushed?.ok == true ? ((try? await ADB.shared.shell(copy, serial: serial, timeout: 600)) ?? "") : ""
+            if pushed?.ok != true { _ = try? await ADB.shared.shell("rm -rf \(ADB.quote(remoteStage))", serial: serial, timeout: 10) }
+            if out.contains("restored") { restored += 1 }
         }
         let what = emulators?.count == 1 ? emulators!.first! : "all"
         Log.write("save restore: \(what) from \(snapshot.url.lastPathComponent), \(restored)/\(entries.count) item(s)")

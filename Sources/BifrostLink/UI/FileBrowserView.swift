@@ -42,7 +42,7 @@ struct FileBrowserView: View {
         .sheet(isPresented: $showLargest) {
             LargestFilesView(files: files, settings: settings, isPresented: $showLargest)
         }
-        .confirmationDialog("Delete \(selection.count == 1 ? "“\(selectedFiles.first?.name ?? "")”" : "\(selection.count) items") from the Thor?",
+        .confirmationDialog("Delete \(selection.count == 1 ? "“\(selectedFiles.first?.name ?? "")”" : "\(selection.count) items") from the \(DeviceInfo.name)?",
                             isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 let targets = selectedFiles
@@ -458,7 +458,7 @@ struct LargestFilesView: View {
         }
         .frame(width: 560, height: 520)
         .task { if files.largest.isEmpty || !files.largest.allSatisfy({ $0.path.hasPrefix(root) }) { await files.findLargestFiles() } }
-        .confirmationDialog("Delete \(selection.count) file\(selection.count == 1 ? "" : "s") from the Thor?", isPresented: $confirmDelete) {
+        .confirmationDialog("Delete \(selection.count) file\(selection.count == 1 ? "" : "s") from the \(DeviceInfo.name)?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 let targets = selected
                 selection.removeAll()

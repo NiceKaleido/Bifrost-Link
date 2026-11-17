@@ -189,11 +189,11 @@ final class EmulationHub: ObservableObject {
         let staging = FileManager.default.temporaryDirectory.appendingPathComponent("bifrost-patch-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         let local = staging.appendingPathComponent((path as NSString).lastPathComponent)
-        pairing = "Copying \(local.lastPathComponent) from the Thor…"
+        pairing = "Copying \(local.lastPathComponent) from the \(DeviceInfo.name)…"
         let result = try? await ADB.shared.run(["pull", path, local.path], serial: serial, timeout: 0)
         pairing = nil
         guard result?.ok == true else {
-            toast?("exclamationmark.triangle", "Couldn’t copy \(local.lastPathComponent) from the Thor")
+            toast?("exclamationmark.triangle", "Couldn’t copy \(local.lastPathComponent) from the \(DeviceInfo.name)")
             return
         }
         var rom = romItem(local)

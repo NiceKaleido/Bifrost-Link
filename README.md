@@ -22,21 +22,23 @@ Everything happens directly over the USB cable. Nothing is uploaded anywhere, an
 5. [Playing](#playing): keyboard, mouse, controllers
 6. [Sound](#sound)
 7. [Screenshots, recordings and clips](#screenshots-recordings-and-clips)
-8. [The side panel](#the-side-panel): Files, Library, Saves, Cleanup
+8. [The side panel](#the-side-panel): Files, Apps, Library, Saves, Cleanup
 9. [Ports](#ports): native games for your Thor
 10. [Play Time](#play-time)
 11. [Docking: lid, screens, power and charging](#docking-lid-screens-power-and-charging)
-12. [Settings at a glance](#settings-at-a-glance)
-13. [Keyboard shortcuts](#keyboard-shortcuts)
-14. [Troubleshooting](#troubleshooting)
-15. [For developers](#for-developers)
+12. [Menu bar, login and updates](#menu-bar-login-and-updates)
+13. [Settings at a glance](#settings-at-a-glance)
+14. [Keyboard shortcuts](#keyboard-shortcuts)
+15. [Troubleshooting](#troubleshooting)
+16. [For developers](#for-developers)
 
 ---
 
 ## What you need
 
 - A Mac with Apple silicon (M1 or newer) and macOS 14 Sonoma or later.
-- An AYN Thor. Other Android devices mostly work too, but the docking features are made for the Thor.
+- An AYN Thor, or an AYN Odin (Odin 2, Odin 2 Mini, Odin 2 Portal, Odin 3). On an Odin there is one screen instead of two, so the layout and second-screen options are simply not shown, and ratings in Ports come from owners of the same Odin. Other Android devices mostly work too.
+- Cocoon is optional. Bifrost reads its library, artwork and play time when it's installed; without it, Play Time counts docked sessions only, and layouts are remembered per app instead of per game. Wherever Cocoon is needed, Bifrost says so.
 - A USB-C cable that carries data, not just power.
 - **USB debugging** turned on on the Thor (explained below).
 
@@ -113,6 +115,21 @@ Cocoon's on-screen keyboard is made for controllers. It would turn Enter into a 
 
 Choose who the settings are for: only the game that's running, all games of its system, or every game. When a game starts, its own settings are used automatically. While the window is open, a dot lights up next to each button as you press it, so you can see what's what.
 
+**Controller shortcuts.** Hold **Home** on your controller and press another button:
+
+| Combo | Action |
+| --- | --- |
+| Home + R1 | Quick save |
+| Home + L1 | Quick load |
+| Home + R2 | Save replay |
+| Home + L2 | Screenshot |
+| Home + Start | Close the game |
+| Home + Select | Start / stop recording |
+
+Tapping Home on its own still goes Home. Change the combos, or use Select as the button to hold, in Controls… ▸ Shortcuts. On the keyboard, Quick Save is ⌃⌘S and Quick Load ⌃⌘L.
+
+**Quick save and load** use the emulator's own save-state keys, read from its settings, so they follow whatever you set up there. That covers RetroArch (its save/load state keys, F2/F4 by default) and PPSSPP (its Save State / Load State mapping, including controller combos). Dolphin, DuckStation, ARMSX2 and Azahar on Android don't offer save-state keys that another app can press; Bifrost tells you so and you use their in-game menu instead.
+
 **No controller? Use the keyboard and mouse.** Device ▸ Keyboard Plays as Controller (⌃⌘K) turns your keyboard into a controller:
 
 | Keys | Controller |
@@ -152,7 +169,7 @@ When a game is running, captures are named after the game and sorted into a fold
 
 ## The side panel
 
-⇧⌘F or the sidebar button opens a panel next to the screens. The column on its left lists the sections by name, grouped into **Files**; **Library**, **Ports** and **Play Time** for your games; and **Saves** and **Cleanup** to look after them. A number on Ports means updates are waiting. Each section starts with a short explanation, and its main action is always in the top-right corner: Rescan, Refresh, Back Up Now or Measure. Drag the panel's left edge to make it wider.
+⇧⌘F or the sidebar button opens a panel next to the screens. The column on its left lists the sections by name, grouped into **Files** and **Apps**; **Library**, **Ports** and **Play Time** for your games; and **Saves** and **Cleanup** to look after them. A number on Ports means updates are waiting. Each section starts with a short explanation, and its main action is always in the top-right corner: Rescan, Refresh, Back Up Now or Measure. Drag the panel's left edge to make it wider.
 
 At the bottom of the panel, the **Activity** strip shows everything that's running, such as file copies, game shrinking and port installs, each with its own progress and a Cancel button.
 
@@ -164,6 +181,15 @@ Browse the Thor's internal storage and SD card.
 - **Sizes** shows how big each folder is, biggest first.
 - **Find Largest Files** (⋯ menu) helps when space runs low.
 - Right-click a folder and choose **Back Up With Saves** to include it in your save backups.
+
+### Apps
+Every app you installed yourself, biggest first, with its version and how much space the app, its data and its cache take. Click an app for its actions:
+- **Open** and **Close**.
+- **Clear Cache** frees the app's cache without touching anything else.
+- **More ▸ Back Up APK to Mac** keeps a copy of exactly this version (all its parts) in `~/Library/Application Support/Bifrost Link/APKs`. **Install a backed-up version** puts it back, handy when an update breaks something.
+- **More ▸ Reset App…** deletes the app's private data, like a fresh install. **Remove App…** uninstalls it, optionally keeping its data.
+
+Emulators, ports and the launcher are labeled. Drop `.apk`, `.apks`, `.xapk` or `.apkm` files at the bottom to install them.
 
 ### Library
 Everything about your games. It checks itself a few seconds after you link.
@@ -205,6 +231,7 @@ The **Ports** tab in the side panel (⌥⌘R, or More ▸ Ports in the toolbar).
 Native ports are PC, console and handheld games rebuilt to run directly on Android, without an emulator. Bifrost shows the community catalog from [Recompa](https://recompa.app), which lists hundreds of them.
 
 - **Browse** all ports, the ones **On Thor**, or **Updates**. Search, and use **Filters** for **Works on the Thor** (rated by other Thor owners), **Dual screen**, type or original platform. Every port shows its Thor rating: great, playable or broken. Click a port for its details, screenshots and versions.
+- **My Games** shows which ports you can use with games you already have. Bifrost compares the games in your `Roms` folders on the Thor with the catalog by name, ignoring region tags and punctuation, so "Mario Kart - Double Dash!! (USA).iso" counts for Mario Kart: Double Dash. Where the catalog lists exact dumps (N64, GBA and other cartridge games), the files are also checked by checksum and marked **Your copy** when they're exactly the version the port accepts; name matches are marked **You have**, because some ports need a specific version or a file prepared on a PC (see "Your game files" in the port's details). Zipped ROMs only match by name. Check Again (or Refresh at the top) looks again after you add games.
 - **Install** with one click. The download comes straight from the port's GitHub page and is checked against the catalog before anything is installed.
 - **Already installed?** Bifrost recognizes the exact version on your Thor and tells you when there's an update. **Update All** updates everything at once, and older versions are available if a new one misbehaves.
 - **Your game files:** most ports need files from your own copy of the game. **Find on Thor** looks through your `Roms` folders for a file that matches exactly. **Choose on Mac…** checks a file from your Mac. Bifrost then puts the file where the port expects it and shows the port's own instructions. Game files are never downloaded from the internet.
@@ -234,11 +261,17 @@ Bifrost is made so the Thor can sit closed next to your Mac. You'll find these o
 - **Unplugging** puts everything back the way it was: the screens, the volume, the keyboard, charging, Wi-Fi and Bluetooth. This happens on the Thor itself, so it works even if you just pull the cable. If the lid is closed, the Thor waits 30 seconds before it sleeps; open it in that time and it simply stays awake.
 - **Sleep Manager** (optional): if you use the Sleep Manager app, Bifrost can pause it while docked so it doesn't switch Wi-Fi off, and restarts it when you unplug.
 
+## Menu bar, login and updates
+
+- **Menu bar:** a link icon in the menu bar shows your device, its battery and what you're playing, with quick actions: Screenshot, Save Replay, Quick Save/Load, Mute, Pause Mirroring and Unlink. With the menu bar item on, closing the window keeps Bifrost running there. Turn it off in Settings ▸ General.
+- **Open at login** (Settings ▸ General) starts Bifrost when you log in, so plugging in the cable is all it takes. **Go full screen when it links** does what it says.
+- **Updates:** Bifrost checks GitHub for a new release once a day (or Bifrost Link ▸ Check for Updates…). It shows what's new and, if you agree, downloads the disk image, checks it against the release's checksum, swaps the app and restarts. Your settings, backups and logs stay where they are.
+
 ## Settings at a glance
 
 | Tab | What's there |
 | --- | --- |
-| **General** | Linking automatically when the Thor is plugged in, the folder for downloaded files |
+| **General** | Linking automatically, full screen on link, open at login, menu bar item, updates, the folder for downloaded files |
 | **Picture** | Sharper picture, cinema mode, stats, full screen controls and pop-ups, codec, quality, frame rate and resolution |
 | **Capture** | Folders for screenshots and recordings, instant replay length |
 | **Docking** | Dark screens, lid and power button, charging separation, Sleep Manager |
@@ -266,6 +299,7 @@ Video settings (quality, codec, frame rate) apply on the next link. Device ▸ R
 | ⌃⌘P | Pause / resume mirroring |
 | ⇧⌘S · ⇧⌘R · ⌥⌘S | Screenshot · Record · Save replay |
 | ⌥⌘E | Make a clip |
+| ⌃⌘S · ⌃⌘L | Quick save · Quick load |
 | ⇧⌘F | Side panel |
 | ⌃⌘K | Keyboard plays as controller |
 | ⌥⌘R · ⇧⌘T | Ports · Play Time |

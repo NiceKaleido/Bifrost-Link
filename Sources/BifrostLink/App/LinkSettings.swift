@@ -122,6 +122,9 @@ final class LinkSettings: ObservableObject {
     @Published var fullscreenControls: Bool { didSet { defaults.set(fullscreenControls, forKey: "fullscreenControls") } }
     @Published var detachedScreen: String { didSet { defaults.set(detachedScreen, forKey: "detachedScreen") } }
     var detachedRole: ScreenRole? { ScreenRole(rawValue: detachedScreen) }
+    @Published var autoUpdateCheck: Bool { didSet { defaults.set(autoUpdateCheck, forKey: "autoUpdateCheck") } }
+    @Published var showMenuBar: Bool { didSet { defaults.set(showMenuBar, forKey: "showMenuBar") } }
+    @Published var fullscreenOnLink: Bool { didSet { defaults.set(fullscreenOnLink, forKey: "fullscreenOnLink") } }
     @Published var thorRatedFirst: Bool { didSet { defaults.set(thorRatedFirst, forKey: "thorRatedFirst") } }
     @Published var checkPortUpdates: Bool { didSet { defaults.set(checkPortUpdates, forKey: "checkPortUpdates") } }
     @Published var macKeyboardTyping: Bool { didSet { defaults.set(macKeyboardTyping, forKey: "macKeyboardTyping") } }
@@ -191,6 +194,9 @@ final class LinkSettings: ObservableObject {
         macKeyboardTyping = value("macKeyboardTyping", true)
         checkPortUpdates = value("checkPortUpdates", true)
         thorRatedFirst = value("thorRatedFirst", true)
+        autoUpdateCheck = value("autoUpdateCheck", true)
+        showMenuBar = value("showMenuBar", true)
+        fullscreenOnLink = value("fullscreenOnLink", false)
         detachedScreen = value("detachedScreen", "")
         downloadFolder = value("downloadFolder", home.appendingPathComponent("Downloads").path)
     }

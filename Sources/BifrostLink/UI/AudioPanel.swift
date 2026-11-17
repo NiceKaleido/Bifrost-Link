@@ -62,10 +62,10 @@ struct AudioPanel: View {
             Toggle("Separate audio per screen", isOn: $settings.perScreenAudio)
                 .help("Captures each screen’s apps separately so they get their own volume. An app shown on both screens counts as top.")
             if !settings.perScreenAudio {
-                Text("Capturing the Thor’s whole audio output. Works with every app.")
+                Text("Capturing the \(DeviceInfo.name)’s whole audio output. Works with every app.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
-            Toggle("Also play on the Thor’s speakers", isOn: $settings.playOnDevice)
+            Toggle("Also play on the \(DeviceInfo.name)’s speakers", isOn: $settings.playOnDevice)
         }
         .toggleStyle(.switch)
         .controlSize(.small)

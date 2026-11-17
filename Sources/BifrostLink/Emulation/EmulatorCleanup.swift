@@ -135,7 +135,7 @@ final class CleanupService: ObservableObject {
         for item in items { Log.write("cleanup: removed \(item.category.rawValue) \(item.path)") }
         working = nil
         selection.subtract(items.map(\.id))
-        toast?("sparkles", "Freed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)). Your Thor says thanks")
+        toast?("sparkles", "Freed \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)). Your \(DeviceInfo.name) says thanks")
         await scan()
         return freed
     }

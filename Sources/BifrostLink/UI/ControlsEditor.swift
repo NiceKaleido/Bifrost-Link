@@ -36,6 +36,7 @@ struct ControlsEditor: View {
     @State private var live: Set<PadInput> = []
     @State private var listening: PadInput?
     @State private var monitor: Any?
+    @State private var shortcutsVersion = 0
 
     private var scopes: [(id: String, title: String)] {
         var list: [(String, String)] = []
@@ -52,6 +53,7 @@ struct ControlsEditor: View {
             header
             Divider().opacity(0.5)
             Form {
+                shortcutsSection
                 buttonsSection
                 sticksSection
                 keyboardSection
@@ -103,6 +105,33 @@ struct ControlsEditor: View {
         .padding(14)
     }
 
+    private var shortcutsSection: some View {
+        Section {
+            Picker("Hold", selection: Binding(
+                get: { _ = shortcutsVersion; return ShortcutStore.modifier?.rawValue ?? "off" },
+                set: { ShortcutStore.modifier = PadInput(rawValue: $0); shortcutsVersion += 1 })) {
+                Text("Home / Guide").tag(PadInput.home.rawValue)
+                Text("Select / View").tag(PadInput.select.rawValue)
+                Text("Off").tag("off")
+            }
+            if ShortcutStore.modifier != nil || shortcutsVersion < 0 {
+                ForEach(ShortcutAction.allCases) { action in
+                    Picker(action.title, selection: Binding(
+                        get: { _ = shortcutsVersion; return ShortcutStore.button(for: action)?.rawValue ?? "off" },
+                        set: { ShortcutStore.set(PadInput(rawValue: $0), for: action); shortcutsVersion += 1 })) {
+                        Text("Off").tag("off")
+                        ForEach(PadInput.buttons.filter { $0 != ShortcutStore.modifier }) { Text("+ \($0.title)").tag($0.rawValue) }
+                    }
+                }
+                Button("Reset Shortcuts") { ShortcutStore.reset(); shortcutsVersion += 1 }
+            }
+        } header: {
+            Text("Shortcuts")
+        } footer: {
+            Text("Hold the button above and press another one. These work for every game with any controller connected to the Mac. Tapping Home on its own still goes Home. Quick save and load use the emulator’s own save-state keys: RetroArch and PPSSPP work out of the box; Dolphin, DuckStation, ARMSX2 and Azahar on Android don’t offer such keys.").font(.caption)
+        }
+    }
+
     private var buttonsSection: some View {
         Section {
             ForEach(PadInput.buttons) { input in
@@ -125,7 +154,7 @@ struct ControlsEditor: View {
         } header: {
             Text("Buttons")
         } footer: {
-            Text("What each button of your controller (and each key below) does on the Thor. The dot lights up while you press it.").font(.caption)
+            Text("What each button of your controller (and each key below) does on the \(DeviceInfo.name). The dot lights up while you press it.").font(.caption)
         }
     }
 

@@ -6,7 +6,7 @@ final class GamepadBridge: @unchecked Sendable {
     enum Identity: String, CaseIterable, Identifiable {
         case odin, xbox
         var id: String { rawValue }
-        var title: String { self == .odin ? "Odin Controller (like the Thor’s own)" : "Xbox Wireless Controller (with rumble)" }
+        var title: String { self == .odin ? "Odin Controller (like the \(DeviceInfo.name)’s own)" : "Xbox Wireless Controller (with rumble)" }
         var vendorId: UInt16 { self == .odin ? 0x2020 : 0x045E }
         var productId: UInt16 { self == .odin ? 0x0111 : 0x02FD }
         var deviceName: String { self == .odin ? "Odin Controller" : "Xbox Wireless Controller" }
@@ -73,10 +73,15 @@ final class GamepadBridge: @unchecked Sendable {
         let activeRumblers = Array(rumblers.values)
         slots.removeAll()
         controllers.removeAll()
+        trackers.removeAll()
         rumblers.removeAll()
         lock.unlock()
         activeRumblers.forEach { $0.stop() }
         if sendDestroy { ids.forEach { control?.uhidDestroy(id: $0) } }
+        if keyboardDeviceUntil != nil {
+            if sendDestroy { control?.uhidDestroy(id: Self.keyboardDeviceSlot) }
+            keyboardDeviceUntil = nil
+        }
         if keyboardActive {
             if sendDestroy { control?.uhidDestroy(id: Self.keyboardSlot) }
             keyboardActive = false
@@ -114,6 +119,7 @@ final class GamepadBridge: @unchecked Sendable {
         var rumbler: Rumbler?
         if let id {
             controllers[id] = nil
+            trackers[id] = nil
             rumbler = rumblers.removeValue(forKey: id)
         }
         lock.unlock()
@@ -169,10 +175,144 @@ final class GamepadBridge: @unchecked Sendable {
         if keyboardActive { sendKeyboard() }
     }
 
+    var onShortcut: ((ShortcutAction) -> Void)?
+    private var trackers: [UInt16: ShortcutTracker] = [:]
+    private var pulsing: Set<UInt16> = []
+
     private func send(_ pad: GCExtendedGamepad, id: UInt16) {
-        let state = PadState(pad)
-        report(state.pressed)
-        control?.uhidInput(id: id, report: encode(profile.apply(state)))
+        let raw = PadState(pad)
+        report(raw.pressed)
+        let tracker = trackers[id] ?? ShortcutTracker()
+        trackers[id] = tracker
+        let result = tracker.filter(raw)
+        for action in result.fired {
+            DispatchQueue.main.async { [weak self] in self?.onShortcut?(action) }
+        }
+        guard !pulsing.contains(id) else { return }
+        let p = profile
+        if let tap = result.tapModifier {
+            var tapState = result.state
+            tapState.pressed.insert(tap)
+            control?.uhidInput(id: id, report: encode(p.apply(tapState)))
+            let release = encode(p.apply(result.state))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                self?.control?.uhidInput(id: id, report: release)
+            }
+        } else {
+            control?.uhidInput(id: id, report: encode(p.apply(result.state)))
+        }
+    }
+
+    static let keyboardDeviceSlot: UInt16 = 31
+    static let keyboardDescriptor: [UInt8] = [
+        0x05, 0x01, 0x09, 0x06, 0xA1, 0x01,
+        0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+        0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
+        0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+        0xC0,
+    ]
+    private var keyboardDeviceUntil: Date?
+
+    static func hidUsage(forAndroidKeycode code: Int32) -> UInt8? {
+        switch code {
+        case 131...142: return UInt8(0x3A + (code - 131))
+        case 29...54: return UInt8(0x04 + (code - 29))
+        case 8...16: return UInt8(0x1E + (code - 8))
+        case 7: return 0x27
+        case 111: return 0x29
+        case 62: return 0x2C
+        case 66: return 0x28
+        case 61: return 0x2B
+        case 67: return 0x2A
+        case 22: return 0x4F
+        case 21: return 0x50
+        case 20: return 0x51
+        case 19: return 0x52
+        case 112: return 0x4C
+        case 124: return 0x49
+        case 122: return 0x4A
+        case 123: return 0x4D
+        case 92: return 0x4B
+        case 93: return 0x4E
+        default: return nil
+        }
+    }
+
+    static func hidModifiers(forMeta meta: Int32, hold: Int32?) -> UInt8 {
+        var bits: UInt8 = 0
+        if meta & 0x41 != 0 || hold == 59 { bits |= 0x02 }
+        if hold == 60 { bits |= 0x20 }
+        if meta & 0x3000 != 0 || hold == 113 { bits |= 0x01 }
+        if meta & 0x12 != 0 || hold == 57 { bits |= 0x04 }
+        return bits
+    }
+
+    @MainActor
+    func typeOnKeyboard(keycode: Int32, meta: Int32, hold: Int32?) async -> Bool {
+        guard let control, let usage = Self.hidUsage(forAndroidKeycode: keycode) else { return false }
+        let modifiers = Self.hidModifiers(forMeta: meta, hold: hold)
+        if keyboardDeviceUntil == nil || keyboardDeviceUntil! < Date() {
+            control.uhidCreate(id: Self.keyboardDeviceSlot, vendorId: 0x18D1, productId: 0x5452, name: "Bifrost Keyboard", descriptor: Self.keyboardDescriptor)
+            try? await Task.sleep(nanoseconds: 1_300_000_000)
+        }
+        keyboardDeviceUntil = Date().addingTimeInterval(55)
+        if modifiers != 0 {
+            control.uhidInput(id: Self.keyboardDeviceSlot, report: Data([modifiers, 0, 0, 0, 0, 0, 0, 0]))
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        control.uhidInput(id: Self.keyboardDeviceSlot, report: Data([modifiers, 0, usage, 0, 0, 0, 0, 0]))
+        try? await Task.sleep(nanoseconds: 90_000_000)
+        control.uhidInput(id: Self.keyboardDeviceSlot, report: Data([modifiers, 0, 0, 0, 0, 0, 0, 0]))
+        try? await Task.sleep(nanoseconds: 40_000_000)
+        control.uhidInput(id: Self.keyboardDeviceSlot, report: Data([0, 0, 0, 0, 0, 0, 0, 0]))
+        let until = keyboardDeviceUntil
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard let self, self.keyboardDeviceUntil == until else { return }
+            self.keyboardDeviceUntil = nil
+            self.control?.uhidDestroy(id: Self.keyboardDeviceSlot)
+        }
+        return true
+    }
+
+    private func firstControllerSlot() -> UInt16? {
+        lock.lock()
+        defer { lock.unlock() }
+        return controllers.keys.sorted().first
+    }
+
+    @MainActor
+    func pulse(_ inputs: [PadInput]) async -> Bool {
+        guard let control else { return false }
+        var slot = firstControllerSlot()
+        var temporary = false
+        if slot == nil {
+            if keyboardActive {
+                slot = Self.keyboardSlot
+            } else {
+                slot = Self.keyboardSlot
+                temporary = true
+                control.uhidCreate(id: Self.keyboardSlot, vendorId: identity.vendorId, productId: identity.productId,
+                                   name: identity.deviceName, descriptor: Self.descriptor)
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+        }
+        guard let id = slot else { return false }
+        pulsing.insert(id)
+        var state = PadState()
+        state.pressed = Set(inputs)
+        control.uhidInput(id: id, report: encode(state, swapFaces: false))
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        control.uhidInput(id: id, report: encode(PadState(), swapFaces: false))
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        pulsing.remove(id)
+        if temporary {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !keyboardActive { control.uhidDestroy(id: Self.keyboardSlot) }
+        } else {
+            refreshAll()
+        }
+        return true
     }
 
     private func report(_ inputs: Set<PadInput>) {
@@ -261,7 +401,7 @@ final class GamepadBridge: @unchecked Sendable {
         control?.uhidInput(id: Self.keyboardSlot, report: encode(p.apply(state)))
     }
 
-    private func encode(_ state: PadState) -> Data {
+    private func encode(_ state: PadState, swapFaces: Bool = true) -> Data {
         func axis(_ v: Float) -> UInt16 {
             let clamped = max(-1, min(1, v))
             return UInt16(clamping: Int((clamped + 1) * 32767.5))
@@ -271,7 +411,7 @@ final class GamepadBridge: @unchecked Sendable {
         }
         let p = state.pressed
         var buttons: UInt16 = 0
-        let nintendo = identity == .odin && nintendoLayout
+        let nintendo = swapFaces && identity == .odin && nintendoLayout
         if p.contains(.a) { buttons |= 1 << (nintendo ? 1 : 0) }
         if p.contains(.b) { buttons |= 1 << (nintendo ? 0 : 1) }
         if p.contains(.x) { buttons |= 1 << (nintendo ? 4 : 3) }

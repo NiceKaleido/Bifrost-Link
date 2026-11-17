@@ -57,6 +57,7 @@ final class DeviceManager: ObservableObject {
     let cleanup = CleanupService()
     let cocoon = CocoonBridge()
     let stats = PlayStats()
+    let apps = AppManager()
     let updater = EmulatorUpdater()
     let ports = PortCatalog()
     private var homeProfile: LayoutProfile?
@@ -96,6 +97,22 @@ final class DeviceManager: ObservableObject {
         ports.backups = backups
         ports.romFolders = { [weak self] in self?.emulation.folders.mapValues(\.path) ?? [:] }
         stats.bridge = cocoon
+        apps.toast = toastHandler
+        apps.names = { [weak self] package in
+            guard let self else { return nil }
+            if package == CocoonBridge.package { return "Cocoon" }
+            return self.ports.ports.first { $0.forks.contains { $0.package == package } }?.name
+        }
+        apps.kinds = { [weak self] package in
+            guard let self else { return nil }
+            if CocoonBridge.homePackages.contains(package) { return "Launcher" }
+            if Emulators.all.contains(where: { $0.package == package }) || EmulatorHotkeys.names[package] != nil { return "Emulator" }
+            if self.ports.packages.contains(package) { return "Port" }
+            return nil
+        }
+        gamepad.onShortcut = { [weak self] action in
+            Task { @MainActor in self?.handleShortcut(action) }
+        }
         cocoon.onSessionEnded = { [weak self] playing, ended in self?.stats.record(playing, ended: ended) }
         backups.toast = toastHandler
         cleanup.toast = toastHandler
@@ -240,6 +257,7 @@ final class DeviceManager: ObservableObject {
         self.serial = serial
         self.model = model.replacingOccurrences(of: "_", with: " ")
         deviceName = self.model.isEmpty ? "Android" : self.model
+        DeviceInfo.update(model: deviceName)
         state = .linking(deviceName)
         linkTask = Task { [weak self] in
             guard let self else { return }
@@ -315,6 +333,7 @@ final class DeviceManager: ObservableObject {
         cleanup.reset(serial: serial)
         updater.reset(serial: serial)
         ports.reset(serial: serial)
+        apps.reset(serial: serial)
         updater.excludedPackages = ports.packages
         Task { [weak self] in
             guard let self else { return }
@@ -527,7 +546,7 @@ final class DeviceManager: ObservableObject {
         Log.write("unlink: device \(present ? "present" : "gone")")
         await teardown(devicePresent: present)
         state = .searching
-        if let reason { showToast("cable.connector.slash", present ? reason : "Thor disconnected") }
+        if let reason { showToast("cable.connector.slash", present ? reason : "\(DeviceInfo.name) disconnected") }
     }
 
     private func deviceStillPresent() async -> Bool {
@@ -574,6 +593,7 @@ final class DeviceManager: ObservableObject {
         cleanup.reset(serial: nil)
         updater.reset(serial: nil)
         ports.reset(serial: nil)
+        apps.reset(serial: nil)
         homeProfile = nil
         battery = nil
         screenApps = [:]
@@ -694,7 +714,7 @@ final class DeviceManager: ObservableObject {
             power?.applyPanels(true)
             applyThorVolume()
             Log.write("mirroring paused")
-            showToast("pause.circle", "Mirroring paused, the Thor’s screens are back on")
+            showToast("pause.circle", "Mirroring paused, the \(DeviceInfo.name)’s screens are back on")
         } else {
             startAudio()
             applyThorVolume()
@@ -715,6 +735,56 @@ final class DeviceManager: ObservableObject {
                 _ = try? await ADB.shared.shell(Self.volumeRestoreShell, serial: serial, timeout: 10)
             }
             Log.write(full ? "thor media volume at full while linked" : "thor media volume restored")
+        }
+    }
+
+    func handleShortcut(_ action: ShortcutAction) {
+        guard state == .linked else { return }
+        switch action {
+        case .quickSave: quickState(.save)
+        case .quickLoad: quickState(.load)
+        case .saveReplay:
+            if settings.replayEnabled { saveReplay() } else { showToast("clock.arrow.circlepath", "Instant replay is off. Turn it on in the More menu first") }
+        case .screenshot: screenshot()
+        case .closeApp: closeForegroundApp()
+        case .record: toggleRecording()
+        }
+    }
+
+    func quickState(_ action: StateAction) {
+        guard let serial, state == .linked else { return }
+        Task {
+            guard let listing = try? await ADB.shared.shell("cmd activity stack list", serial: serial, timeout: 5) else { return }
+            let visible = AudioRouter.visiblePackages(listing)
+            var target: (display: Int, package: String)?
+            for display in visible.keys.sorted() {
+                if let package = visible[display]?.first(where: { !CocoonBridge.homePackages.contains($0) }) {
+                    target = (display, package)
+                    break
+                }
+            }
+            guard let target else {
+                showToast("gamecontroller", "No game is running")
+                return
+            }
+            let name = EmulatorHotkeys.names[target.package] ?? EmulatorUpdater.knownNames[target.package] ?? EmulatorUpdater.prettyName(target.package)
+            guard let binding = await EmulatorHotkeys.binding(for: target.package, action: action, serial: serial) else {
+                showToast("exclamationmark.triangle", EmulatorHotkeys.unsupported[target.package] ?? "\(name) has no \(action.title)-state shortcut Bifrost can use")
+                return
+            }
+            switch binding {
+            case .keys(let hold, let press):
+                if let control = screen(.top)?.control { gamepad.bind(control) }
+                guard await gamepad.typeOnKeyboard(keycode: press.keycode, meta: press.meta, hold: hold?.keycode) else {
+                    showToast("exclamationmark.triangle", "\(name)’s \(action.title)-state key can’t be pressed from here")
+                    return
+                }
+            case .pad(let inputs):
+                if let control = screen(.top)?.control { gamepad.bind(control) }
+                guard await gamepad.pulse(inputs) else { return }
+            }
+            Log.write("quick \(action.title) in \(target.package) via \(binding)")
+            showToast(action == .save ? "square.and.arrow.down" : "arrow.uturn.backward", action == .save ? "Saved state in \(name)" : "Loaded state in \(name)")
         }
     }
 

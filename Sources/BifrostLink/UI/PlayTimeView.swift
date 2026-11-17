@@ -14,7 +14,7 @@ struct PlayTimeView: View {
                 ContentUnavailableView {
                     Label("No play time yet", systemImage: "gamecontroller")
                 } description: {
-                    Text("Play something while docked and it shows up here. Play time Cocoon recorded on the Thor is added when the Thor links.")
+                    Text(stats.cocoonRoot == nil && stats.serial != nil ? "Play something while docked and it shows up here. With Cocoon installed, the play time it records on the device is added too." : "Play something while docked and it shows up here. Play time Cocoon recorded on the \(DeviceInfo.name) is added when the \(DeviceInfo.name) links.")
                 } actions: {
                     Button("Load From Cocoon") { Task { await stats.refreshCocoon() } }
                         .disabled(stats.serial == nil || stats.refreshing)
@@ -22,6 +22,12 @@ struct PlayTimeView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        if stats.cocoonRoot == nil && stats.serial != nil {
+                            Label("Play time per game on the device itself comes from Cocoon, which isn’t installed. Bifrost still counts the time you play while docked, by game for Cocoon launches and by app otherwise.", systemImage: "info.circle")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .padding(10)
+                                .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
                         header
                         mostPlayed
                         perSystem
@@ -117,7 +123,7 @@ struct PlayTimeView: View {
     private var recent: some View {
         section("Recent sessions while docked") {
             if stats.sessions.isEmpty {
-                Text("Sessions are recorded from now on while the Thor is linked.").font(.caption).foregroundStyle(.secondary)
+                Text("Sessions are recorded from now on while the \(DeviceInfo.name) is linked.").font(.caption).foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 6) {
                     ForEach(stats.sessions.suffix(15).reversed()) { session in

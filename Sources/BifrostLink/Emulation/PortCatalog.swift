@@ -115,6 +115,7 @@ struct RecompaPort: Codable, Hashable, Identifiable {
     let reports: [RecompaReport]?
     let downloads: Int?
     let addedAt: String?
+    let aliases: [String]?
 
     var typeTitle: String {
         switch type {
@@ -127,6 +128,7 @@ struct RecompaPort: Codable, Hashable, Identifiable {
     }
 
     var dualScreen: Bool { forks.contains { $0.dualScreen == true } }
+    var aliasNames: [String] { aliases ?? [] }
 }
 
 struct ThorRating: Hashable {
@@ -137,7 +139,7 @@ struct ThorRating: Hashable {
     init() {}
 
     init(_ reports: [RecompaReport]) {
-        for report in reports where report.device.lowercased().contains("thor") {
+        for report in reports where DeviceInfo.matches(report: report.device) {
             great += report.great
             playable += report.playable
             broken += report.broken
@@ -145,10 +147,10 @@ struct ThorRating: Hashable {
     }
 
     var verdict: String {
-        guard total > 0 else { return "No Thor reports" }
-        if great >= playable && great >= broken { return "Great on Thor" }
-        if broken > great + playable { return "Broken on Thor" }
-        return "Playable on Thor"
+        guard total > 0 else { return "No \(DeviceInfo.name) reports" }
+        if great >= playable && great >= broken { return "Great on \(DeviceInfo.name)" }
+        if broken > great + playable { return "Broken on \(DeviceInfo.name)" }
+        return "Playable on \(DeviceInfo.name)"
     }
 }
 
@@ -181,6 +183,15 @@ struct PortJob: Identifiable, Equatable {
     }
 }
 
+struct LibraryMatch: Identifiable, Hashable {
+    let portId: String
+    let path: String
+    let exact: Bool
+    let label: String
+    var id: String { portId + "|" + path }
+    var fileName: String { (path as NSString).lastPathComponent }
+}
+
 struct GameFileMatch: Identifiable, Hashable {
     let path: String
     let label: String
@@ -199,6 +210,9 @@ final class PortCatalog: ObservableObject {
     @Published var jobs: [PortJob] = []
     @Published private(set) var gameFiles: [String: [GameFileMatch]] = [:]
     @Published private(set) var searchingFiles: Set<String> = []
+    @Published private(set) var libraryMatches: [String: [LibraryMatch]] = [:]
+    @Published private(set) var matchingLibrary = false
+    @Published private(set) var libraryMatchedAt: Date?
     var serial: String?
     var romFolders: (() -> [String: String])?
     var backups: SaveBackupService?
@@ -393,8 +407,8 @@ final class PortCatalog: ObservableObject {
     }
 
     func compatibility(_ port: RecompaPort) -> String? {
-        if let minSdk = port.requirements?.minSdk, minSdk > sdk { return "Needs Android SDK \(minSdk), the Thor has \(sdk)" }
-        if let wanted = port.requirements?.abi, !wanted.isEmpty, !wanted.contains(where: abis.contains) { return "Built for \(wanted.joined(separator: ", ")), not the Thor’s processor" }
+        if let minSdk = port.requirements?.minSdk, minSdk > sdk { return "Needs Android SDK \(minSdk), the \(DeviceInfo.name) has \(sdk)" }
+        if let wanted = port.requirements?.abi, !wanted.isEmpty, !wanted.contains(where: abis.contains) { return "Built for \(wanted.joined(separator: ", ")), not the \(DeviceInfo.name)’s processor" }
         return nil
     }
 
@@ -444,7 +458,7 @@ final class PortCatalog: ObservableObject {
     private func process(_ id: UUID) async {
         guard let job = jobs.first(where: { $0.id == id }), let asset = job.release.asset, let url = URL(string: asset.url) else { return }
         guard let serial else {
-            update(id) { $0.status = .failed("The Thor isn’t linked") }
+            update(id) { $0.status = .failed("The \(DeviceInfo.name) isn’t linked") }
             return
         }
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("bifrost-port-\(UUID().uuidString)")
@@ -644,7 +658,7 @@ final class PortCatalog: ObservableObject {
             ok = (try? await ADB.shared.run(["push", match.path, target + "/" + name], serial: serial, timeout: 0))?.ok == true
         }
         Log.write("recompa: delivered \(name) for \(port.name) to \(target): \(ok)")
-        toast?(ok ? "checkmark.circle" : "exclamationmark.triangle", ok ? "\(name) is in \(target.replacingOccurrences(of: "/sdcard/", with: "Internal/"))" : "Couldn’t copy \(name) to the Thor")
+        toast?(ok ? "checkmark.circle" : "exclamationmark.triangle", ok ? "\(name) is in \(target.replacingOccurrences(of: "/sdcard/", with: "Internal/"))" : "Couldn’t copy \(name) to the \(DeviceInfo.name)")
     }
 
     func checkLocal(_ url: URL, port: RecompaPort, asset: RecompaAsset) async -> GameFileMatch? {
@@ -673,5 +687,78 @@ final class PortCatalog: ObservableObject {
         let out = FileManager.default.temporaryDirectory.appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".z64")
         try? Data(bytes).write(to: out)
         return out
+    }
+
+    nonisolated static func normalizedTitle(_ name: String) -> String {
+        var text = name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US"))
+        if let dot = text.range(of: #"\.[a-z0-9]{2,5}$"#, options: .regularExpression) { text.removeSubrange(dot) }
+        text = text.replacingOccurrences(of: #"\([^)]*\)|\[[^\]]*\]|\{[^}]*\}"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "&", with: " and ")
+        text = text.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "’", with: "")
+        text = text.replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+        var words = text.split(separator: " ").map(String.init).filter { $0 != "the" }
+        if words.last == "64", words.count > 1 { words.removeLast() }
+        return words.joined(separator: " ")
+    }
+
+    func scanLibraryMatches() async {
+        guard let serial, !matchingLibrary, index != nil else { return }
+        matchingLibrary = true
+        defer { matchingLibrary = false }
+        let folders = romFolders?() ?? [:]
+        var byFolder: [String: [RecompaPort]] = [:]
+        for port in ports {
+            guard let system = Self.systemFolders[port.originalPlatform], let folder = folders[system] else { continue }
+            byFolder[folder, default: []].append(port)
+        }
+        guard !byFolder.isEmpty else {
+            libraryMatches = [:]
+            libraryMatchedAt = Date()
+            return
+        }
+        var result: [String: [LibraryMatch]] = [:]
+        let listing = (try? await ADB.shared.shell(byFolder.keys.map { "find \(ADB.quote($0)) -maxdepth 2 -type f ! -name '.*' 2>/dev/null" }.joined(separator: "; "), serial: serial, timeout: 60)) ?? ""
+        let files = listing.split(separator: "\n").map(String.init)
+        let skip: Set<String> = ["txt", "xml", "cfg", "ini", "png", "jpg", "sav", "srm", "state"]
+        for (folder, group) in byFolder {
+            let inFolder = files.filter { $0.hasPrefix(folder + "/") && !skip.contains(($0 as NSString).pathExtension.lowercased()) }
+            var titles: [String: [String]] = [:]
+            for file in inFolder {
+                titles[Self.normalizedTitle((file as NSString).lastPathComponent), default: []].append(file)
+            }
+            for port in group {
+                let names = Set(([port.game, port.name] + (port.aliasNames)).compactMap { $0 }.map(Self.normalizedTitle).filter { $0.count >= 3 })
+                for name in names {
+                    for file in titles[name] ?? [] where !(result[port.id] ?? []).contains(where: { $0.path == file }) {
+                        result[port.id, default: []].append(LibraryMatch(portId: port.id, path: file, exact: false, label: "Same game"))
+                    }
+                }
+            }
+            var hashes: [String: (port: RecompaPort, label: String)] = [:]
+            var extensions = Set<String>()
+            for port in group {
+                for asset in port.assets ?? [] {
+                    for accepted in asset.accepted ?? [] {
+                        guard let sha1 = accepted.sha1?.lowercased(), let format = accepted.format?.lowercased(), format != "iso" else { continue }
+                        hashes[sha1] = (port, accepted.label ?? "Verified copy")
+                        extensions.insert(format)
+                    }
+                }
+            }
+            guard !extensions.isEmpty else { continue }
+            let names = extensions.sorted().map { "-iname '*.\($0)'" }.joined(separator: " -o ")
+            let out = (try? await ADB.shared.shell("find \(ADB.quote(folder)) -maxdepth 2 -type f \\( \(names) \\) -size -600M -exec sha1sum {} + 2>/dev/null", serial: serial, timeout: 300)) ?? ""
+            for line in out.split(separator: "\n") {
+                let parts = line.split(separator: " ", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
+                guard parts.count == 2, let hit = hashes[parts[0].lowercased()] else { continue }
+                var list = result[hit.port.id] ?? []
+                list.removeAll { $0.path == parts[1] }
+                list.insert(LibraryMatch(portId: hit.port.id, path: parts[1], exact: true, label: hit.label), at: 0)
+                result[hit.port.id] = list
+            }
+        }
+        libraryMatches = result
+        libraryMatchedAt = Date()
+        Log.write("recompa: \(result.count) port(s) match games in the Roms folders, \(result.values.filter { $0.contains(where: \.exact) }.count) exactly")
     }
 }

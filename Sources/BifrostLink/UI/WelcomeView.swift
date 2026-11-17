@@ -43,7 +43,7 @@ struct WelcomeView: View {
     private var headline: String {
         switch manager.state {
         case .noADB: return "adb is missing"
-        case .searching: return "Waiting for your Thor to dock…"
+        case .searching: return "Waiting for your \(DeviceInfo.name) to dock…"
         case .unauthorized: return "Allow USB debugging"
         case .linking(let name): return "Building the bridge to \(name)…"
         case .linked: return "Linked"
@@ -55,9 +55,9 @@ struct WelcomeView: View {
         switch manager.state {
         case .noADB: return "Install Android platform tools with Homebrew:\nbrew install android-platform-tools"
         case .searching: return manager.settings.autoConnect
-            ? "Connect the Thor over USB with USB debugging enabled. Bifrost links up automatically."
-            : "Connect the Thor over USB, then press Link."
-        case .unauthorized: return "Unlock the Thor and confirm the “Allow USB debugging?” prompt. Tick “Always allow from this computer” so it docks without asking next time."
+            ? "Connect the \(DeviceInfo.name) over USB with USB debugging enabled. Bifrost links up automatically."
+            : "Connect the \(DeviceInfo.name) over USB, then press Link."
+        case .unauthorized: return "Unlock the \(DeviceInfo.name) and confirm the “Allow USB debugging?” prompt. Tick “Always allow from this computer” so it docks without asking next time."
         case .linking: return "Starting the mirror on both screens, audio routing and the lid guard."
         case .linked: return ""
         case .failed(let message): return message

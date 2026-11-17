@@ -53,11 +53,11 @@ struct SavesView: View {
         } message: { item in
             switch item {
             case .restoreAll(let snapshot):
-                Text("\(snapshot.emulators.joined(separator: ", ")) will be closed on the Thor and their saves replaced with the ones from this backup. Your current saves are backed up first as “Before restore”.")
+                Text("\(snapshot.emulators.joined(separator: ", ")) will be closed on the \(DeviceInfo.name) and their saves replaced with the ones from this backup. Your current saves are backed up first as “Before restore”.")
             case .restore(_, let emulator):
-                Text("\(emulator) will be closed on the Thor and its saves replaced with the ones from this backup. Your current saves are backed up first as “Before restore”.")
+                Text("\(emulator) will be closed on the \(DeviceInfo.name) and its saves replaced with the ones from this backup. Your current saves are backed up first as “Before restore”.")
             case .delete(let snapshot):
-                Text("The backup from \(snapshot.date.formatted(date: .abbreviated, time: .shortened)) (\(snapshot.bytes.bytesText)) is removed from this Mac. Nothing changes on the Thor.")
+                Text("The backup from \(snapshot.date.formatted(date: .abbreviated, time: .shortened)) (\(snapshot.bytes.bytesText)) is removed from this Mac. Nothing changes on the \(DeviceInfo.name).")
             }
         }
     }
@@ -101,7 +101,7 @@ struct SavesView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Divider().opacity(0.5)
-            Toggle("Back up automatically once a day when the Thor links", isOn: $settings.autoSaveBackup)
+            Toggle("Back up automatically once a day when the \(DeviceInfo.name) links", isOn: $settings.autoSaveBackup)
                 .toggleStyle(.switch).controlSize(.small).font(.caption)
             HStack {
                 Text("Keep").font(.caption)
@@ -126,18 +126,18 @@ struct SavesView: View {
             let missing = backups.sources.filter { !$0.custom && !$0.found }
             let included = found.filter { settings.isSaveSourceIncluded($0.key) }
             SectionHeader(title: "What gets backed up", symbol: "checklist",
-                          trailing: found.isEmpty ? nil : "\(included.reduce(Int64(0)) { $0 + $1.bytes }.bytesText) on the Thor")
+                          trailing: found.isEmpty ? nil : "\(included.reduce(Int64(0)) { $0 + $1.bytes }.bytesText) on the \(DeviceInfo.name)")
             Card {
                 if backups.sources.isEmpty {
                     HStack(spacing: 8) {
                         if backups.scanningSources { ProgressView().controlSize(.small) }
-                        Text(backups.scanningSources ? "Looking for saves on the Thor…" : backups.serial == nil ? "Link the Thor to see what’s there." : "Nothing found yet.")
+                        Text(backups.scanningSources ? "Looking for saves on the \(DeviceInfo.name)…" : backups.serial == nil ? "Link the \(DeviceInfo.name) to see what’s there." : "Nothing found yet.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
                     ForEach(found + custom) { source in sourceRow(source) }
                     if !missing.isEmpty {
-                        Text("Not found on this Thor: \(missing.map(\.name).joined(separator: ", "))")
+                        Text("Not found on this \(DeviceInfo.name): \(missing.map(\.name).joined(separator: ", "))")
                             .font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
@@ -171,7 +171,7 @@ struct SavesView: View {
                                 .background(Theme.panel, in: Capsule())
                         }
                     }
-                    Text(source.found ? "\(source.bytes.bytesText) · \(source.paths.count == 1 ? shortPath(source.paths[0]) : "\(source.paths.count) locations")" : "Folder not found on the Thor")
+                    Text(source.found ? "\(source.bytes.bytesText) · \(source.paths.count == 1 ? shortPath(source.paths[0]) : "\(source.paths.count) locations")" : "Folder not found on the \(DeviceInfo.name)")
                         .font(.caption2).foregroundStyle(source.found ? .secondary : Color.orange).lineLimit(1).truncationMode(.middle)
                 }
             }
@@ -346,12 +346,12 @@ struct AddSaveFolderSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Add a save folder").font(.headline)
-            Text("Everything inside this folder on the Thor is copied with every backup and can be restored like the rest.")
+            Text("Everything inside this folder on the \(DeviceInfo.name) is copied with every backup and can be restored like the rest.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Form {
                 TextField("Name", text: $name, prompt: Text("e.g. Citra saves"))
-                TextField("Folder on the Thor", text: $path, prompt: Text("/sdcard/…"))
+                TextField("Folder on the \(DeviceInfo.name)", text: $path, prompt: Text("/sdcard/…"))
                     .font(.body.monospaced())
             }
             .formStyle(.columns)
@@ -384,7 +384,7 @@ struct AddSaveFolderSheet: View {
         let exists = await backups.checkFolder(clean)
         checking = false
         guard exists || backups.serial == nil else {
-            problem = "There’s no folder at that path on the Thor. Check the spelling, paths are case sensitive."
+            problem = "There’s no folder at that path on the \(DeviceInfo.name). Check the spelling, paths are case sensitive."
             return
         }
         settings.addCustomSaveFolder(clean, name: name)
@@ -457,7 +457,7 @@ struct CleanupView: View {
             }
         } message: {
             let saves = selectedItems.filter { $0.category.perGame }.count
-            Text(saves > 0 ? "\(saves) save/state item(s) are backed up to your Mac first. The emulators are closed on the Thor while cleaning." : "Caches rebuild themselves; the emulators are closed on the Thor while cleaning.")
+            Text(saves > 0 ? "\(saves) save/state item(s) are backed up to your Mac first. The emulators are closed on the \(DeviceInfo.name) while cleaning." : "Caches rebuild themselves; the emulators are closed on the \(DeviceInfo.name) while cleaning.")
         }
     }
 

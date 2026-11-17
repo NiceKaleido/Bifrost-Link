@@ -224,7 +224,7 @@ struct StageView: View {
                     VStack(spacing: 10) {
                         Image(systemName: "pause.circle.fill").font(.system(size: 44)).foregroundStyle(Theme.bifrost)
                         Text("Mirroring paused").font(.title3.weight(.semibold))
-                        Text("The Thor isn’t streaming. Its screens and sound are back on the device, files and the library still work.")
+                        Text("The \(DeviceInfo.name) isn’t streaming. Its screens and sound are back on the device, files and the library still work.")
                             .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 320)
                         Button("Resume Mirroring") { manager.toggleMirroring() }
                             .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: [])

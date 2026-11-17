@@ -319,7 +319,7 @@ extension EmulationHub {
             await files.waitUntilIdle()
         }
         guard !Task.isCancelled else { return nil }
-        report("Sending back to the Thor", 0)
+        report("Sending back to the \(DeviceInfo.name)", 0)
         let pushPoll = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)

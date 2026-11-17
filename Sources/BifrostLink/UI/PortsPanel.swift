@@ -2,12 +2,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum PortsScope: String, CaseIterable, Identifiable {
-    case all, installed, updates
+    case all, myGames, installed, updates
     var id: String { rawValue }
     var title: String {
         switch self {
         case .all: return "All"
-        case .installed: return "On Thor"
+        case .myGames: return "My Games"
+        case .installed: return "Installed"
         case .updates: return "Updates"
         }
     }
@@ -30,6 +31,7 @@ struct PortsPanel: View {
         switch scope {
         case .installed: list = list.filter(catalog.isInstalled)
         case .updates: list = list.filter { $0.forks.contains(where: catalog.hasUpdate) }
+        case .myGames: list = list.filter { catalog.libraryMatches[$0.id] != nil }
         case .all: break
         }
         if platform != "all" { list = list.filter { $0.originalPlatform == platform } }
@@ -39,6 +41,11 @@ struct PortsPanel: View {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty { list = list.filter { $0.name.lowercased().contains(q) || ($0.game ?? "").lowercased().contains(q) || $0.forks.contains { $0.repo.lowercased().contains(q) } } }
         return list.sorted { a, b in
+            if scope == .myGames {
+                let ea = catalog.libraryMatches[a.id]?.contains(where: \.exact) == true
+                let eb = catalog.libraryMatches[b.id]?.contains(where: \.exact) == true
+                if ea != eb { return ea }
+            }
             if settings.thorRatedFirst {
                 let ra = catalog.rating(a).score, rb = catalog.rating(b).score
                 if ra != rb { return ra > rb }
@@ -57,10 +64,27 @@ struct PortsPanel: View {
             Divider().opacity(0.5)
             if catalog.ports.isEmpty {
                 emptyState
+            } else if scope == .myGames && (catalog.libraryMatchedAt == nil || (catalog.matchingLibrary && filtered.isEmpty)) {
+                VStack(spacing: 10) {
+                    if catalog.matchingLibrary {
+                        ProgressView("Comparing your games with the catalog…")
+                    } else {
+                        ContentUnavailableView {
+                            Label("Ports for your games", systemImage: "rectangle.and.text.magnifyingglass")
+                        } description: {
+                            Text("Bifrost looks through the Roms folders on your \(DeviceInfo.name) and shows which ports can be made from games you already have.")
+                        } actions: {
+                            Button("Check My Games") { Task { await catalog.scanLibraryMatches() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(manager.state != .linked)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if filtered.isEmpty {
-                ContentUnavailableView(scope == .updates ? "Everything is up to date" : "Nothing here",
+                ContentUnavailableView(scope == .updates ? "Everything is up to date" : scope == .myGames ? "No matches yet" : "Nothing here",
                                        systemImage: scope == .updates ? "checkmark.circle" : "magnifyingglass",
-                                       description: Text(scope == .updates ? "Installed ports match their latest release." : "Try another filter or search."))
+                                       description: Text(scope == .updates ? "Installed ports match their latest release." : scope == .myGames ? "None of the games in your Roms folders has a port in the catalog, or a filter hides them." : "Try another filter or search."))
                     .frame(maxHeight: .infinity)
             } else {
                 List(filtered) { port in
@@ -76,6 +100,11 @@ struct PortsPanel: View {
         .task {
             await catalog.refresh()
             if catalog.installed.isEmpty { await catalog.detectInstalled() }
+        }
+        .onChange(of: scope) { _, value in
+            if value == .myGames && catalog.libraryMatchedAt == nil && manager.state == .linked {
+                Task { await catalog.scanLibraryMatches() }
+            }
         }
         .sheet(item: $selected) { port in
             PortDetailView(port: port, catalog: catalog, manager: manager)
@@ -94,7 +123,7 @@ struct PortsPanel: View {
             HStack(spacing: 6) {
                 TextField("Search ports", text: $search).textFieldStyle(.roundedBorder)
                 Menu {
-                    Toggle("Works on the Thor", isOn: $thorOnly)
+                    Toggle("Works on the \(DeviceInfo.name)", isOn: $thorOnly)
                     Toggle("Dual screen", isOn: $dualOnly)
                     Picker("Type", selection: $type) {
                         Text("All types").tag("all")
@@ -117,6 +146,20 @@ struct PortsPanel: View {
                     Label(activeFilters > 0 ? "Filters (\(activeFilters))" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
                 }
                 .fixedSize()
+            }
+            if scope == .myGames && catalog.libraryMatchedAt != nil {
+                HStack(spacing: 6) {
+                    if catalog.matchingLibrary {
+                        ProgressView().controlSize(.mini)
+                        Text("Checking your games…").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("\(catalog.libraryMatches.count) ports for games you have · \(catalog.libraryMatches.values.filter { $0.contains(where: \.exact) }.count) exact copies")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Check Again") { Task { await catalog.scanLibraryMatches() } }
+                        .disabled(catalog.matchingLibrary || manager.state != .linked)
+                }
             }
             if scope == .updates && !catalog.updates.isEmpty {
                 Button { catalog.updateAll() } label: { Label("Update All (\(catalog.updates.count))", systemImage: "arrow.down.circle") }
@@ -180,16 +223,27 @@ struct PortRow: View {
                 HStack(spacing: 4) {
                     Text(port.name).font(.callout.weight(.medium)).lineLimit(1)
                     if port.dualScreen {
-                        Image(systemName: "rectangle.split.1x2").font(.caption2).foregroundStyle(.secondary).help("Supports both Thor screens")
+                        Image(systemName: "rectangle.split.1x2").font(.caption2).foregroundStyle(.secondary).help("Supports both \(DeviceInfo.name) screens")
                     }
                 }
                 Text(catalog.platformName(port.originalPlatform)).font(.caption2).foregroundStyle(.secondary)
+                if let match = catalog.libraryMatches[port.id]?.first {
+                    Label {
+                        Text(match.exact ? "Your copy: \(match.fileName) (\(match.label))" : "You have: \(match.fileName)")
+                            .lineLimit(1).truncationMode(.middle)
+                    } icon: {
+                        Image(systemName: match.exact ? "checkmark.seal.fill" : "checkmark.circle")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(match.exact ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                    .help(match.exact ? "This exact dump is one the port accepts" : "Same game by name. Check the version the port needs in its details")
+                }
                 HStack(spacing: 4) {
                     RatingChip(rating: catalog.rating(port))
                     if port.forks.contains(where: catalog.hasUpdate) {
                         tag("Update", Theme.accent)
                     } else if catalog.isInstalled(port) {
-                        tag("On Thor", .green)
+                        tag("On \(DeviceInfo.name)", .green)
                     }
                 }
             }
@@ -216,14 +270,14 @@ struct RatingChip: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.15), in: Capsule())
-            .help(rating.total == 0 ? "No reports from Thor owners yet" : "Thor owners: \(rating.great) great, \(rating.playable) playable, \(rating.broken) broken")
+            .help(rating.total == 0 ? "No reports from \(DeviceInfo.name) owners yet" : "\(DeviceInfo.name) owners: \(rating.great) great, \(rating.playable) playable, \(rating.broken) broken")
     }
 
     private var color: Color {
         guard rating.total > 0 else { return .secondary }
         switch rating.verdict {
-        case "Great on Thor": return .green
-        case "Broken on Thor": return .red
+        case "Great on \(DeviceInfo.name)": return .green
+        case "Broken on \(DeviceInfo.name)": return .red
         default: return .yellow
         }
     }
@@ -294,7 +348,7 @@ struct PortJobRow: View {
                     Text("Checking the download…").font(.caption2).foregroundStyle(.secondary)
                 case .installing:
                     ProgressView().progressViewStyle(.linear).controlSize(.mini)
-                    Text("Installing on the Thor…").font(.caption2).foregroundStyle(.secondary)
+                    Text("Installing on the \(DeviceInfo.name)…").font(.caption2).foregroundStyle(.secondary)
                 case .done:
                     Text("Installed").font(.caption2).foregroundStyle(.secondary)
                 case .failed(let message):
@@ -363,6 +417,9 @@ struct PortDetailView: View {
                     if let forks = catalog.ambiguous(port) {
                         ambiguity(forks)
                     }
+                    if let matches = catalog.libraryMatches[port.id], !matches.isEmpty {
+                        librarySection(matches)
+                    }
                     versions
                     if let assets = port.assets, !assets.isEmpty {
                         gameFiles(assets)
@@ -412,7 +469,7 @@ struct PortDetailView: View {
 
     private func ambiguity(_ forks: [RecompaFork]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Which version is on your Thor?", systemImage: "questionmark.circle").font(.callout.weight(.semibold))
+            Label("Which version is on your \(DeviceInfo.name)?", systemImage: "questionmark.circle").font(.callout.weight(.semibold))
             Text("Several versions share the same app id and the installed build isn’t in the catalog, so Bifrost can’t tell them apart. Pick the one you installed to get its updates.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
@@ -425,6 +482,25 @@ struct PortDetailView: View {
             .controlSize(.small)
         }
         .padding(12)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func librarySection(_ matches: [LibraryMatch]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("In your library").font(.headline)
+            ForEach(matches) { match in
+                HStack(spacing: 8) {
+                    Image(systemName: match.exact ? "checkmark.seal.fill" : "checkmark.circle").foregroundStyle(match.exact ? .green : .secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(match.fileName).font(.callout).lineLimit(1).truncationMode(.middle)
+                        Text(match.exact ? "Exact copy the port accepts (\(match.label))" : "Same game by name. The port may need a specific version or format, see “Your game files” below")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
@@ -445,7 +521,7 @@ struct PortDetailView: View {
                 HStack(spacing: 6) {
                     Text(fork.name ?? fork.repo).font(.callout.weight(.medium))
                     if let channel = fork.channel { Text(channel).font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 5).background(Theme.panel, in: Capsule()) }
-                    if fork.dualScreen == true { Image(systemName: "rectangle.split.1x2").font(.caption2).help("Supports both Thor screens") }
+                    if fork.dualScreen == true { Image(systemName: "rectangle.split.1x2").font(.caption2).help("Supports both \(DeviceInfo.name) screens") }
                     RatingChip(rating: catalog.rating(fork))
                 }
                 Link(fork.repo, destination: URL(string: "https://github.com/\(fork.repo)")!).font(.caption2)
@@ -456,7 +532,7 @@ struct PortDetailView: View {
                     Text("No release yet").font(.caption2).foregroundStyle(.secondary)
                 }
                 if installed, let entry {
-                    Text(entry.tag.map { "On your Thor: \($0)\(entry.exact ? "" : " (as installed by Bifrost)")" } ?? "On your Thor: version \(entry.versionName), build not in the catalog")
+                    Text(entry.tag.map { "On your \(DeviceInfo.name): \($0)\(entry.exact ? "" : " (as installed by Bifrost)")" } ?? "On your \(DeviceInfo.name): version \(entry.versionName), build not in the catalog")
                         .font(.caption2).foregroundStyle(update ? Theme.accent : .green)
                 }
             }
@@ -514,7 +590,7 @@ struct PortDetailView: View {
                 Text(asset.label).font(.callout.weight(.medium))
                 Spacer()
                 if checksums {
-                    Button(searching ? "Looking…" : "Find on Thor") { Task { await catalog.findGameFiles(port, asset: asset) } }
+                    Button(searching ? "Looking…" : "Find on \(DeviceInfo.name)") { Task { await catalog.findGameFiles(port, asset: asset) } }
                         .disabled(!linked || searching)
                     Button("Choose on Mac…") { chooseLocal(asset) }
                         .disabled(!linked)
