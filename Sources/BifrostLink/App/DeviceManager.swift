@@ -654,21 +654,25 @@ final class DeviceManager: ObservableObject {
         }
     }
 
-    private static let radioKey = "sleepManagerAwakeRadios"
+    // v2: v1 could record Sleep Manager's "asleep" radios (wifi off) when linking with the lid open but the screen off.
+    private static let radioKey = "sleepManagerAwakeRadios.v2"
 
     private func pauseSleepManager(serial: String) async -> String? {
         let installed = (try? await ADB.shared.shell("pm list packages com.med.sleepmanager", serial: serial)) ?? ""
         guard installed.contains("com.med.sleepmanager") else { return nil }
-        let probe = (try? await ADB.shared.shell("echo $(settings get global wifi_on) $(settings get global bluetooth_on) $(getevent -pl 2>/dev/null | grep -c 'SW_LID\\*')", serial: serial, timeout: 10)) ?? ""
+        let probe = (try? await ADB.shared.shell("echo $(settings get global wifi_on) $(settings get global bluetooth_on) $(getevent -pl 2>/dev/null | grep -c 'SW_LID\\*') $(dumpsys power | grep -c 'mWakefulness=Awake')", serial: serial, timeout: 10)) ?? ""
         let values = probe.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         var awake = (UserDefaults.standard.data(forKey: Self.radioKey)).flatMap { try? JSONDecoder().decode(RadioState.self, from: $0) }
-        if values.count == 3 {
-            let current = RadioState(wifi: values[0] == "1", bluetooth: values[1] == "1")
-            if values[2] == "0" {
+        if values.count == 4 {
+            let current = RadioState(wifi: values[0] == "1" || values[0] == "2", bluetooth: values[1] == "1" || values[1] == "2")
+            // Only trust the live radios as the "awake" state when Sleep Manager isn't holding them down:
+            // lid open AND the device actually awake. Otherwise it may have switched them off for sleep.
+            let trulyAwake = values[2] == "0" && values[3] != "0"
+            if trulyAwake {
                 awake = current
                 UserDefaults.standard.set(try? JSONEncoder().encode(current), forKey: Self.radioKey)
             }
-            if awake == nil { awake = values[2] == "0" ? current : RadioState(wifi: true, bluetooth: current.bluetooth) }
+            if awake == nil { awake = trulyAwake ? current : RadioState(wifi: true, bluetooth: current.bluetooth) }
         }
         _ = try? await ADB.shared.shell("am force-stop com.med.sleepmanager", serial: serial)
         let radios = awake ?? RadioState(wifi: true, bluetooth: false)
