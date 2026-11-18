@@ -5,6 +5,7 @@ struct ContentView: View {
     @ObservedObject var settings: LinkSettings
     @State private var showFiles = false
     @State private var isFullScreen = false
+    @State private var toolbarHidden = false
     @AppStorage("sidePanelWidth") private var panelWidth: Double = 470
 
     var body: some View {
@@ -44,11 +45,11 @@ struct ContentView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: showFiles)
-        .background(WindowObserver(isFullScreen: $isFullScreen,
+        .background(WindowObserver(isFullScreen: $isFullScreen, toolbarHidden: $toolbarHidden,
                                    fitAspect: linked && !showFiles ? StageView.contentSize(manager: manager, settings: settings) : nil))
         .modifier(ImportSheetPresenter(hub: manager.emulation))
         .toolbar { toolbar }
-        .modifier(ToolbarVisibility(hidden: isFullScreen))
+        .modifier(ToolbarVisibility(hidden: toolbarHidden))
         .navigationTitle(manager.cocoon.nowPlaying?.title ?? "Bifrost Link")
         .frame(minWidth: 480, minHeight: 320)
         .onReceive(NotificationCenter.default.publisher(for: .bifrostToggleFiles)) { _ in showFiles.toggle() }
@@ -57,6 +58,7 @@ struct ContentView: View {
             showFiles = true
         }
         .onChange(of: isFullScreen) { _, full in
+            if full { showFiles = false }
             if full && !settings.quietFullscreen { manager.showToast("arrow.down.right.and.arrow.up.left", settings.fullscreenControls ? "Move to the top edge for controls · ⌘F to leave" : "Press ⌘F to leave full screen") }
         }
         .onChange(of: manager.state) { _, state in
@@ -142,6 +144,7 @@ struct ToolbarVisibility: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             content.toolbar(hidden ? .hidden : .visible, for: .windowToolbar)
+                .toolbarBackground(.hidden, for: .windowToolbar)
         } else {
             content
         }

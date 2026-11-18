@@ -3,6 +3,9 @@ import AppKit
 
 struct WindowObserver: NSViewRepresentable {
     @Binding var isFullScreen: Bool
+    /// Flipped only once full screen has settled: hiding the toolbar mid-transition shrinks the
+    /// title area to a bare (grey) title bar that shows for the length of the animation.
+    @Binding var toolbarHidden: Bool
     var fitAspect: CGSize?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -20,6 +23,7 @@ struct WindowObserver: NSViewRepresentable {
             DispatchQueue.main.async { coordinator.attach(to: nsView.window) }
         }
         coordinator.aspect = fitAspect
+        coordinator.installDelegateProxy()
     }
 
     final class Coordinator {
@@ -37,18 +41,42 @@ struct WindowObserver: NSViewRepresentable {
             self.window = window
             window.collectionBehavior.insert(.fullScreenPrimary)
             window.backgroundColor = .black
+            installDelegateProxy()
+            // No grey title bar: let the background run underneath and keep just the toolbar buttons on top.
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
             let center = NotificationCenter.default
             tokens.append(center.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) { [weak self] _ in
-                window.toolbar?.isVisible = false
                 self?.parent.isFullScreen = true
+            })
+            tokens.append(center.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: window, queue: .main) { [weak self] _ in
+                // In full screen the toolbar lives in its own strip window that stays pinned (a grey bar)
+                // unless the app asks for auto-hide. Ask for it, and hide the (empty) toolbar again in case
+                // SwiftUI brought it back during the transition.
+                window.toolbar?.isVisible = false
+                self?.parent.toolbarHidden = true
+                NSApp.presentationOptions = [.fullScreen, .autoHideMenuBar, .autoHideToolbar]
             })
             tokens.append(center.addObserver(forName: NSWindow.willExitFullScreenNotification, object: window, queue: .main) { [weak self] _ in
                 window.toolbar?.isVisible = true
+                self?.parent.toolbarHidden = false
                 self?.parent.isFullScreen = false
             })
             tokens.append(center.addObserver(forName: .bifrostFitWindow, object: nil, queue: .main) { [weak self] _ in
                 self?.fit(animate: true)
             })
+        }
+
+        private let delegateProxy = FullScreenDelegateProxy()
+
+        /// macOS picks the full-screen toolbar behavior when the transition starts, via the window delegate.
+        /// SwiftUI owns that delegate, so sit in front of it to ask for an auto-hiding toolbar; everything
+        /// else is forwarded untouched. Re-checked on every update in case SwiftUI swaps its delegate back in.
+        func installDelegateProxy() {
+            guard let window, window.delegate !== delegateProxy else { return }
+            delegateProxy.inner = window.delegate
+            window.delegate = delegateProxy
         }
 
         func fit(animate: Bool) {
@@ -92,5 +120,23 @@ struct WindowObserver: NSViewRepresentable {
         deinit {
             tokens.forEach(NotificationCenter.default.removeObserver)
         }
+    }
+}
+
+final class FullScreenDelegateProxy: NSObject, NSWindowDelegate {
+    var inner: NSWindowDelegate?
+
+    override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector) || inner?.responds(to: selector) == true
+    }
+
+    override func forwardingTarget(for selector: Selector!) -> Any? {
+        inner?.responds(to: selector) == true ? inner : nil
+    }
+
+    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposed: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions {
+        var options = inner?.window?(window, willUseFullScreenPresentationOptions: proposed) ?? proposed
+        options.formUnion([.fullScreen, .autoHideMenuBar, .autoHideToolbar])
+        return options
     }
 }
