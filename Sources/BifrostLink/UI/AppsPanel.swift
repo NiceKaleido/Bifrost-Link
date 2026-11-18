@@ -160,23 +160,31 @@ struct AppsPanel: View {
     }
 
     private var dropZone: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 6) {
             if let working = apps.working {
                 ProgressView().controlSize(.small)
-                Text(working).font(.caption).foregroundStyle(.secondary)
+                Text(working).font(.callout.weight(.semibold))
+                Text("Hang on, this can take a moment.").font(.caption).foregroundStyle(.secondary)
             } else {
-                Image(systemName: "arrow.down.app").foregroundStyle(Theme.accent)
-                Text("Drop .apk or .apks files here to install them").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "square.and.arrow.down.on.square").font(.title2).foregroundStyle(Theme.bifrost)
+                Text("Drop apps here").font(.callout.weight(.semibold))
+                Text(".apk, .apks, .xapk and .apkm files are installed on your \(DeviceInfo.name).").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                HStack {
+                    Button("Choose Files…") { pick() }
+                    Button("Show APK Backups") {
+                        try? FileManager.default.createDirectory(at: apps.backupRoot, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(apps.backupRoot)
+                    }
+                }
+                .controlSize(.small)
+                .padding(.top, 2)
             }
-            Spacer()
-            Button("Show APK Backups") {
-                try? FileManager.default.createDirectory(at: apps.backupRoot, withIntermediateDirectories: true)
-                NSWorkspace.shared.open(apps.backupRoot)
-            }
-            .controlSize(.small)
         }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(dropTargeted ? Theme.accent.opacity(0.14) : Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(dropTargeted ? AnyShapeStyle(Theme.bifrost) : AnyShapeStyle(Theme.hairline), style: StrokeStyle(lineWidth: dropTargeted ? 2 : 1, dash: dropTargeted ? [7, 4] : [])))
         .padding(12)
-        .background(dropTargeted ? Theme.accent.opacity(0.14) : Color.clear)
         .overlay(alignment: .top) { Divider().opacity(0.5) }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             Task {
@@ -185,5 +193,16 @@ struct AppsPanel: View {
             }
             return true
         }
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Install"
+        panel.allowedContentTypes = ["apk", "apks", "xapk", "apkm"].compactMap { UTType(filenameExtension: $0) }
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        Task { await apps.installDropped(urls) }
     }
 }

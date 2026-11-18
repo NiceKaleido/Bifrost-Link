@@ -57,6 +57,7 @@ final class DeviceManager: ObservableObject {
     let cleanup = CleanupService()
     let cocoon = CocoonBridge()
     let stats = PlayStats()
+    let monitor = DeviceMonitor()
     let apps = AppManager()
     let updater = EmulatorUpdater()
     let ports = PortCatalog()
@@ -97,6 +98,29 @@ final class DeviceManager: ObservableObject {
         ports.backups = backups
         ports.romFolders = { [weak self] in self?.emulation.folders.mapValues(\.path) ?? [:] }
         stats.bridge = cocoon
+        monitor.foreground = { [weak self] in
+            guard let serial = self?.serial,
+                  let listing = try? await ADB.shared.shell("cmd activity stack list", serial: serial, timeout: 5) else { return nil }
+            let visible = AudioRouter.visiblePackages(listing)
+            let ordered = (visible[0] ?? []) + visible.keys.sorted().filter { $0 != 0 }.flatMap { visible[$0] ?? [] }
+            return ordered.first { !CocoonBridge.homePackages.contains($0) } ?? ordered.first
+        }
+        monitor.names = { [weak self] name in
+            guard let self, name.contains("."), !name.contains("/") else { return nil }
+            let package = String(name.split(separator: ":").first ?? Substring(name))
+            // An emulator running a known game: name the game.
+            if let playing = self.cocoon.nowPlaying, playing.package == package, !playing.file.isEmpty {
+                let game = self.stats.customNames["game:" + playing.file] ?? playing.title
+                return "\(game) (\(EmulatorUpdater.knownNames[package] ?? playing.player))"
+            }
+            return self.stats.displayName(package: package) ?? self.apps.names?(package) ?? EmulatorUpdater.knownNames[package] ?? EmulatorUpdater.prettyName(package)
+        }
+        stats.names = { [weak self] package in self?.apps.names?(package) }
+        stats.isGame = { [weak self] package in
+            guard let self else { return true }
+            let kind = self.apps.kinds?(package)
+            return kind != "Emulator" && kind != "Launcher"
+        }
         apps.toast = toastHandler
         apps.names = { [weak self] package in
             guard let self else { return nil }
@@ -339,6 +363,7 @@ final class DeviceManager: ObservableObject {
             guard let self else { return }
             await self.emulation.refreshFolders()
             self.cocoon.start(serial: serial, cocoonRoot: self.emulation.cocoonRoot)
+            self.monitor.start(serial: serial)
             self.stats.serial = serial
             self.stats.cocoonRoot = self.emulation.cocoonRoot
             await self.backups.autoBackupIfDue()
@@ -587,6 +612,7 @@ final class DeviceManager: ObservableObject {
         }
         files.reset(serial: nil)
         cocoon.stop()
+        monitor.stop()
         stats.serial = nil
         emulation.reset(serial: nil)
         backups.reset(serial: nil)
@@ -1094,6 +1120,7 @@ final class DeviceManager: ObservableObject {
     }
 
     private func updateStatsLoop() {
+        monitor.watch("overlay", settings.statsOverlay)
         statsTask?.cancel()
         statsTask = nil
         guard settings.statsOverlay else {

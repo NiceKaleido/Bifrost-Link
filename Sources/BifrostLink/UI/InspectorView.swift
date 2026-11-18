@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, apps, library, ports, playtime, saves, cleanup
+    case files, apps, library, ports, playtime, performance, saves, cleanup
 
     var id: String { rawValue }
 
@@ -12,6 +12,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .library: return "Library"
         case .ports: return "Ports"
         case .playtime: return "Play Time"
+        case .performance: return "Performance"
         case .saves: return "Saves"
         case .cleanup: return "Cleanup"
         }
@@ -24,6 +25,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .library: return "Game Library"
         case .ports: return "Native Ports"
         case .playtime: return "Play Time"
+        case .performance: return "Performance"
         case .saves: return "Save Backups"
         case .cleanup: return "Cleanup"
         }
@@ -36,6 +38,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .library: return "Import games, check your collection and make room."
         case .ports: return "Android versions of classic games, rated by \(DeviceInfo.name) owners."
         case .playtime: return "How long you play, on the \(DeviceInfo.name) and while docked."
+        case .performance: return "Live frame rate, load, memory and temperatures from your \(DeviceInfo.name)."
         case .saves: return "Copies of your emulator saves and settings on this Mac."
         case .cleanup: return "Free up space that emulators leave behind."
         }
@@ -48,12 +51,13 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .library: return "books.vertical.fill"
         case .ports: return "shippingbox.fill"
         case .playtime: return "timer"
+        case .performance: return "gauge.with.dots.needle.67percent"
         case .saves: return "clock.arrow.circlepath"
         case .cleanup: return "sparkles"
         }
     }
 
-    static let groups: [[InspectorTab]] = [[.files, .apps], [.library, .ports, .playtime], [.saves, .cleanup]]
+    static let groups: [[InspectorTab]] = [[.files, .apps], [.library, .ports, .playtime, .performance], [.saves, .cleanup]]
 }
 
 struct InspectorView: View {
@@ -75,6 +79,7 @@ struct InspectorView: View {
                     case .library: LibraryView(hub: manager.emulation, files: manager.files, updater: manager.updater, ports: manager.ports)
                     case .ports: PortsPanel(catalog: manager.ports, manager: manager, settings: settings)
                     case .playtime: PlayTimeView(stats: manager.stats, cocoon: manager.cocoon)
+                    case .performance: PerformanceView(monitor: manager.monitor, manager: manager)
                     case .saves: SavesView(backups: manager.backups, settings: settings)
                     case .cleanup: CleanupView(cleanup: manager.cleanup)
                     }
@@ -93,6 +98,7 @@ struct InspectorView: View {
         case .library: LibraryHeaderActions(hub: manager.emulation)
         case .ports: PortsHeaderActions(catalog: manager.ports)
         case .playtime: PlayTimeHeaderActions(stats: manager.stats)
+        case .performance: PerformanceHeaderActions(settings: settings)
         case .saves: SavesHeaderActions(backups: manager.backups)
         case .cleanup: CleanupHeaderActions(cleanup: manager.cleanup)
         }
@@ -240,6 +246,18 @@ struct PortsHeaderActions: View {
         }
         .disabled(catalog.loading || catalog.detecting)
         .help("Load the latest catalog and check the \(DeviceInfo.name) again")
+    }
+}
+
+struct PerformanceHeaderActions: View {
+    @ObservedObject var settings: LinkSettings
+
+    var body: some View {
+        Toggle(isOn: $settings.statsOverlay) {
+            Label("Overlay", systemImage: settings.statsOverlay ? "rectangle.inset.topleft.filled" : "rectangle.dashed")
+        }
+        .toggleStyle(.button)
+        .help(settings.statsOverlay ? "Hide the stats overlay on the stream" : "Show live stats over the stream")
     }
 }
 

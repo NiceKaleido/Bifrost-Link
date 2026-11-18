@@ -5,6 +5,8 @@ struct PlayTimeView: View {
     @ObservedObject var stats: PlayStats
     @ObservedObject var cocoon: CocoonBridge
     @State private var icons: [String: NSImage] = [:]
+    @State private var renaming: (key: String, title: String)?
+    @State private var draftName = ""
 
     private var top: [GameTotal] { Array(stats.totals.prefix(10)) }
 
@@ -40,23 +42,31 @@ struct PlayTimeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: top.map(\.key)) { await loadIcons() }
-    }
-
-    private var header: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
-            tile("Total", value: hours(stats.totalMinutes), symbol: "clock")
-            tile("Games played", value: "\(stats.totals.count)", symbol: "square.stack.3d.up")
-            tile("This week", value: "\(stats.playedThisWeek)", symbol: "calendar")
-            tile("Longest session", value: stats.longestSession.map { hours($0.minutes) } ?? "–", symbol: "flame",
-                 detail: stats.longestSession?.title)
+        .alert("Rename \(renaming?.title ?? "")", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $draftName)
+            Button("Rename") { if let item = renaming { stats.rename(item.key, to: draftName) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Shown in Play Time instead of the name read from the \(DeviceInfo.name).")
         }
     }
 
-    private func tile(_ title: String, value: String, symbol: String, detail: String? = nil) -> some View {
+    private var header: some View {
+        let systems = stats.bySystem.count
+        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            tile("Total", value: hours(stats.totalMinutes), symbol: "clock", detail: systems == 1 ? "on 1 system" : "across \(systems) systems")
+            tile("Games played", value: "\(stats.totals.count)", symbol: "square.stack.3d.up", detail: "with a minute or more")
+            tile("This week", value: "\(stats.playedThisWeek)", symbol: "calendar", detail: "games in the last 7 days")
+            tile("Longest session", value: stats.longestSession.map { hours($0.minutes) } ?? "–", symbol: "flame",
+                 detail: stats.longestSession.map { stats.customNames[PlayStats.key(for: $0)] ?? $0.title } ?? "while docked")
+        }
+    }
+
+    private func tile(_ title: String, value: String, symbol: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: symbol).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title2.weight(.semibold).monospacedDigit())
-            if let detail { Text(detail).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+            Label(title, systemImage: symbol).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(value).font(.title2.weight(.semibold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+            Text(detail).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -93,6 +103,24 @@ struct PlayTimeView: View {
                             .frame(height: 5)
                         }
                     }
+                    .contentShape(Rectangle())
+                    .contextMenu {
+                        gameMenu(key: game.key, title: game.title)
+                    }
+                }
+                if !stats.ignored.isEmpty {
+                    HStack {
+                        Spacer()
+                        Menu("\(stats.ignored.count) not counted") {
+                            ForEach(stats.ignored.sorted { $0.value < $1.value }, id: \.key) { item in
+                                Button("Count \(item.value) Again") { stats.restore(item.key) }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -126,18 +154,32 @@ struct PlayTimeView: View {
                 Text("Sessions are recorded from now on while the \(DeviceInfo.name) is linked.").font(.caption).foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 6) {
-                    ForEach(stats.sessions.suffix(15).reversed()) { session in
+                    ForEach(stats.sessions.filter { stats.ignored[PlayStats.key(for: $0)] == nil }.suffix(15).reversed()) { session in
+                        let key = PlayStats.key(for: session)
+                        let title = stats.customNames[key] ?? session.title
                         HStack {
-                            Text(session.title).font(.callout).lineLimit(1)
+                            Text(title).font(.callout).lineLimit(1)
                             Text(systemName(session.system)).font(.caption2).foregroundStyle(.tertiary)
                             Spacer()
                             Text(session.start.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
                             Text(hours(session.minutes)).font(.caption.monospacedDigit()).frame(width: 64, alignment: .trailing)
                         }
+                        .contentShape(Rectangle())
+                        .contextMenu { gameMenu(key: key, title: title) }
                     }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func gameMenu(key: String, title: String) -> some View {
+        Button("Rename…") { draftName = title; renaming = (key, title) }
+        if stats.customNames[key] != nil {
+            Button("Use Original Name") { stats.rename(key, to: nil) }
+        }
+        Divider()
+        Button("Don’t Count \(title)") { stats.setIgnored(key: key, title: title, true) }
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -160,10 +202,15 @@ struct PlayTimeView: View {
     }
 
     private func loadIcons() async {
-        for game in top where icons[game.key] == nil && !game.file.isEmpty {
-            if let image = cocoon.cachedIcon(system: game.system, file: game.file) {
+        for game in top where icons[game.key] == nil {
+            // Android games use Cocoon's artwork under android_app, named after the package with dots as underscores.
+            let source = game.key.hasPrefix("app:")
+                ? (system: "android_app", file: game.key.dropFirst(4).replacingOccurrences(of: ".", with: "_"))
+                : (system: game.system, file: game.file)
+            guard !source.file.isEmpty else { continue }
+            if let image = cocoon.cachedIcon(system: source.system, file: source.file) {
                 icons[game.key] = image
-            } else if let image = await cocoon.icon(system: game.system, file: game.file) {
+            } else if let image = await cocoon.icon(system: source.system, file: source.file) {
                 icons[game.key] = image
             }
         }

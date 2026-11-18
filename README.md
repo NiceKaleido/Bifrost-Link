@@ -25,12 +25,13 @@ Everything happens directly over the USB cable. Nothing is uploaded anywhere, an
 8. [The side panel](#the-side-panel): Files, Apps, Library, Saves, Cleanup
 9. [Ports](#ports): native games for your Thor
 10. [Play Time](#play-time)
-11. [Docking: lid, screens, power and charging](#docking-lid-screens-power-and-charging)
-12. [Menu bar, login and updates](#menu-bar-login-and-updates)
-13. [Settings at a glance](#settings-at-a-glance)
-14. [Keyboard shortcuts](#keyboard-shortcuts)
-15. [Troubleshooting](#troubleshooting)
-16. [For developers](#for-developers)
+11. [Performance](#performance): live frame rate, load and temperatures
+12. [Docking: lid, screens, power and charging](#docking-lid-screens-power-and-charging)
+13. [Menu bar, login and updates](#menu-bar-login-and-updates)
+14. [Settings at a glance](#settings-at-a-glance)
+15. [Keyboard shortcuts](#keyboard-shortcuts)
+16. [Troubleshooting](#troubleshooting)
+17. [For developers](#for-developers)
 
 ---
 
@@ -96,7 +97,7 @@ The toolbar, from left to right:
 **Picture options** (More menu):
 - **Cinema mode** (⌥⌘C): a soft glow of the game's colors around the screens, like ambient TV lighting. Black bars and loading screens are ignored.
 - **Sharper picture** (⌥⌘U, on by default): upscales the image to your Mac's display.
-- **Stats overlay** (⌥⌘I): frame rate, bitrate and delay, if you're curious.
+- **Stats overlay** (⌥⌘I): the Thor's frame rate, CPU and GPU load, temperature and memory, plus the stream's frame rate, bitrate and delay. Also switchable from the **Performance** tab.
 
 ## Playing
 
@@ -189,7 +190,7 @@ Every app you installed yourself, biggest first, with its version and how much s
 - **More ▸ Back Up APK to Mac** keeps a copy of exactly this version (all its parts) in `~/Library/Application Support/Bifrost Link/APKs`. **Install a backed-up version** puts it back, handy when an update breaks something.
 - **More ▸ Reset App…** deletes the app's private data, like a fresh install. **Remove App…** uninstalls it, optionally keeping its data.
 
-Emulators, ports and the launcher are labeled. Drop `.apk`, `.apks`, `.xapk` or `.apkm` files at the bottom to install them.
+Emulators, ports and the launcher are labeled. Drop `.apk`, `.apks`, `.xapk` or `.apkm` files on the box at the bottom to install them, or click **Choose Files…** there.
 
 ### Library
 Everything about your games. It checks itself a few seconds after you link.
@@ -246,7 +247,31 @@ The **Play Time** tab in the side panel (⇧⌘T) shows how much you play:
 - hours per system
 - a 30-day chart
 
-It combines the play time Cocoon records on the Thor with the sessions Bifrost records while you're docked, without counting anything twice.
+It combines several sources without counting anything twice:
+- the play time Cocoon records for games it launches
+- Android games you added to Cocoon, timed by Android's own usage statistics (with their real app names and Cocoon's artwork)
+- RetroArch's own per-game play time, including games you start inside RetroArch without Cocoon
+- the sessions Bifrost records while you're docked
+
+Emulators and game launchers (like GameNative) never count as games themselves; the time goes to the game.
+
+Right-click a game in **Most played** or **Recent sessions** to:
+- **Rename** it (handy when Cocoon shows a nicer name than the app has, like "Burnout 3" for Takedawn)
+- **Don't Count** it, if it isn't really a game. The "not counted" menu under the list brings it back.
+
+## Performance
+
+The **Performance** tab in the side panel shows what the Thor is doing right now, updated every second while the tab is open:
+- **Frame rate** of the game or app in front, measured from Android's own frame timestamps, with the time per frame and how many frames were late
+- **CPU, GPU and memory** load, with clock speeds per CPU core group and for the GPU
+- **Temperatures** for the CPU, GPU, NPU, memory, battery and more
+- **Battery** level and the power coming in over USB
+- the **busiest processes**, and the stream's own numbers while mirroring
+- live charts of the last two minutes; hover them for exact values
+
+The **Overlay** button at the top shows the same numbers over the stream.
+
+Frame rates are exact, not rounded to the display's nominal rate. A game locked to the screen can show 59.4 rather than 60, because that's how often its frames are actually shown.
 
 ## Docking: lid, screens, power and charging
 

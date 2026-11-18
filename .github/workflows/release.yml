@@ -58,7 +58,8 @@ jobs:
             echo "## Bifrost Link $VERSION"
             echo
             echo "### Changes"
-            git log $RANGE --no-merges --pretty='- %s (%h)'
+            # Each commit's subject as a heading and its body (the detailed changelog) below it.
+            git log $RANGE --no-merges --pretty='#### %s (%h)%n%b' | { grep -v '^Co-Authored-By:' || true; }
             echo
             if [ -n "$PREVIOUS" ]; then
               echo "**Full diff:** https://github.com/${{ github.repository }}/compare/$PREVIOUS...v$VERSION"

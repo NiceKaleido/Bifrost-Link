@@ -94,7 +94,7 @@ struct DetachedScreenContent: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let screen = manager.screen(role) {
-                DetachedTile(controller: screen)
+                DetachedTile(controller: screen, monitor: role == .top ? manager.monitor : nil)
             } else {
                 Text("Waiting for the \(role.title.lowercased())…").font(.callout).foregroundStyle(.secondary)
             }
@@ -105,9 +105,10 @@ struct DetachedScreenContent: View {
 
 struct DetachedTile: View {
     @ObservedObject var controller: ScreenController
+    var monitor: DeviceMonitor?
 
     var body: some View {
-        ScreenTile(controller: controller, chrome: false)
+        ScreenTile(controller: controller, chrome: false, monitor: monitor)
             .aspectRatio(controller.size.width > 0 ? controller.size : CGSize(width: 16, height: 9), contentMode: .fit)
             .onChange(of: controller.size) { _, size in DetachedScreenWindow.shared.setAspect(size) }
     }

@@ -4,7 +4,6 @@ struct ContentView: View {
     @ObservedObject var manager: DeviceManager
     @ObservedObject var settings: LinkSettings
     @State private var showFiles = false
-    @State private var showAudio = false
     @State private var isFullScreen = false
     @AppStorage("sidePanelWidth") private var panelWidth: Double = 470
 
@@ -33,7 +32,7 @@ struct ContentView: View {
         .overlay(alignment: .topTrailing) { recordingBadge }
         .overlay(alignment: .top) {
             if isFullScreen && linked && settings.fullscreenControls {
-                FullscreenBar(manager: manager, settings: settings, showAudio: $showAudio, showInspector: $showFiles)
+                FullscreenBar(manager: manager, settings: settings, showInspector: $showFiles)
             }
         }
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -88,7 +87,7 @@ struct ContentView: View {
                 LayoutControls(manager: manager, settings: settings, cocoon: manager.cocoon)
             }
             ToolbarItemGroup(placement: .automatic) {
-                DeviceControls(manager: manager, settings: settings, showAudio: $showAudio, showInspector: $showFiles, compact: false)
+                DeviceControls(manager: manager, settings: settings, showInspector: $showFiles, compact: false)
             }
         }
     }
@@ -314,9 +313,11 @@ struct LayoutControls: View {
 struct DeviceControls: View {
     @ObservedObject var manager: DeviceManager
     @ObservedObject var settings: LinkSettings
-    @Binding var showAudio: Bool
+    /// Each copy (toolbar, full-screen bar) has its own popover state; a shared flag made two popovers fight.
+    @State private var showAudio = false
     @Binding var showInspector: Bool
     var compact: Bool
+    var onPopover: ((Bool) -> Void)? = nil
 
     private func replay() {
         if settings.replayEnabled {
@@ -343,10 +344,13 @@ struct DeviceControls: View {
             .help(settings.muted ? "Unmute (⇧⌘M)" : "Mute (⇧⌘M)")
             Button { showAudio.toggle() } label: { Label("Volume", systemImage: "slider.horizontal.3") }
                 .help("Volume per screen")
-                .popover(isPresented: $showAudio, arrowEdge: .bottom) {
-                    AudioPanel(manager: manager, settings: settings)
-                }
         }
+        // Anchored on the whole group: in the window toolbar a ControlGroup becomes one segmented
+        // control, so a popover attached to a button inside it has no view to show from.
+        .popover(isPresented: $showAudio, arrowEdge: .bottom) {
+            AudioPanel(manager: manager, settings: settings)
+        }
+        .onChange(of: showAudio) { _, open in onPopover?(open) }
 
         Cluster(compact: compact) {
             Button { manager.screenshot() } label: { Label("Screenshot", systemImage: "camera") }
@@ -407,13 +411,15 @@ final class TopEdgeWatcher: ObservableObject {
     private var monitor: Any?
     private var hideWork: DispatchWorkItem?
     var hovering = false { didSet { if hovering { show() } else { scheduleHide() } } }
+    /// While a popover from the bar is open the bar must stay, or the popover loses its anchor and closes.
+    var pinned = false { didSet { if pinned { show() } else if !hovering { scheduleHide() } } }
 
     func start() {
         stop()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
             if let window = event.window, let self {
                 let y = event.locationInWindow.y
-                if y > window.frame.height - 6 { self.show() } else if !self.hovering && y < window.frame.height - 110 { self.scheduleHide() }
+                if y > window.frame.height - 6 { self.show() } else if !self.hovering && !self.pinned && y < window.frame.height - 110 { self.scheduleHide() }
             }
             return event
         }
@@ -434,7 +440,7 @@ final class TopEdgeWatcher: ObservableObject {
     private func scheduleHide() {
         guard visible, hideWork == nil || hideWork!.isCancelled else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.hovering else { return }
+            guard let self, !self.hovering, !self.pinned else { return }
             withAnimation(.easeIn(duration: 0.25)) { self.visible = false }
             self.hideWork = nil
         }
@@ -446,7 +452,6 @@ final class TopEdgeWatcher: ObservableObject {
 struct FullscreenBar: View {
     @ObservedObject var manager: DeviceManager
     @ObservedObject var settings: LinkSettings
-    @Binding var showAudio: Bool
     @Binding var showInspector: Bool
     @StateObject private var watcher = TopEdgeWatcher()
 
@@ -458,7 +463,8 @@ struct FullscreenBar: View {
                     Divider().frame(height: 20)
                     LayoutControls(manager: manager, settings: settings, cocoon: manager.cocoon)
                     Divider().frame(height: 20)
-                    DeviceControls(manager: manager, settings: settings, showAudio: $showAudio, showInspector: $showInspector, compact: true)
+                    DeviceControls(manager: manager, settings: settings, showInspector: $showInspector, compact: true,
+                                   onPopover: { open in watcher.pinned = open })
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)

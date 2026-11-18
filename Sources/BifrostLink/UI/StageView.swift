@@ -44,9 +44,11 @@ struct ScreenHost: NSViewRepresentable {
 struct StatsHUD: View {
     let stats: ScreenStats.Snapshot
     var audioLatency: Double?
+    var monitor: DeviceMonitor?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            if let monitor { DeviceHUDLine(monitor: monitor) }
             Text("\(Int(stats.fps.rounded())) fps · \(String(format: "%.1f", stats.mbps)) Mbit/s")
             Text("\(Int(stats.latencyMs.rounded())) ms decode→display\(stats.dropped > 0 ? " · \(stats.dropped) dropped" : "")")
             Text("\(stats.codec) \(stats.resolution)")
@@ -62,10 +64,37 @@ struct StatsHUD: View {
     }
 }
 
+/// The device's own numbers, on top of the stream stats in the same overlay.
+struct DeviceHUDLine: View {
+    @ObservedObject var monitor: DeviceMonitor
+
+    var body: some View {
+        if let snap = monitor.snapshot {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 0) {
+                    Text(snap.fps.map { String(format: "%.1f", $0) } ?? "—").foregroundStyle(PerfStatus.frames(snap.fps, target: snap.refreshRate).color)
+                    Text(" fps on \(DeviceInfo.name)")
+                    if let ms = snap.frameTimeMs { Text(String(format: " · %.1f ms", ms)).foregroundStyle(.white.opacity(0.65)) }
+                }
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                HStack(spacing: 0) {
+                    Text("CPU "); Text("\(Int(snap.cpu.rounded()))%").foregroundStyle(PerfStatus.load(snap.cpu).color)
+                    Text(" · GPU "); Text("\(Int(snap.gpu.rounded()))%").foregroundStyle(PerfStatus.load(snap.gpu).color)
+                    if let temp = snap.cpuTemp { Text(" · "); Text("\(Int(temp.rounded()))°C").foregroundStyle(PerfStatus.temperature(temp).color) }
+                    Text(String(format: " · %.1f GB", snap.memUsedMB / 1024))
+                    if let watts = snap.watts { Text(String(format: " · %.1f W", watts)) }
+                }
+            }
+            .padding(.bottom, 3)
+        }
+    }
+}
+
 struct ScreenTile: View {
     @ObservedObject var controller: ScreenController
     var chrome = true
     var audioLatency: Double?
+    var monitor: DeviceMonitor?
 
     var body: some View {
         ZStack {
@@ -81,7 +110,7 @@ struct ScreenTile: View {
         }
         .overlay(alignment: .topLeading) {
             if let stats = controller.statsSnapshot {
-                StatsHUD(stats: stats, audioLatency: audioLatency)
+                StatsHUD(stats: stats, audioLatency: audioLatency, monitor: monitor)
                     .padding(8)
                     .allowsHitTesting(false)
             }
@@ -206,7 +235,8 @@ struct StageView: View {
                 ForEach(manager.screens.filter { $0.role != settings.detachedRole }, id: \.role) { screen in
                     let p = placements[screen.role] ?? TilePlacement(rect: CGRect(x: geo.size.width / 2, y: geo.size.height / 2, width: 1, height: 1), visible: false)
                     ScreenTile(controller: screen, chrome: chrome || p.floating,
-                               audioLatency: screen.role == .top ? manager.audioLatencyMs : nil)
+                               audioLatency: screen.role == .top ? manager.audioLatencyMs : nil,
+                               monitor: screen.role == .top ? manager.monitor : nil)
                         .onAppear { bindOverlay(screen, floating: p.floating) }
                         .onChange(of: p.floating) { _, floating in bindOverlay(screen, floating: floating) }
                         .opacity(p.visible ? (p.floating ? settings.overlayOpacity : 1) : 0)

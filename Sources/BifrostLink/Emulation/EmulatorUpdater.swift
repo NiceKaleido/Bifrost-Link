@@ -173,7 +173,7 @@ final class EmulatorUpdater: ObservableObject {
         }
     }
 
-    nonisolated private static func run(_ path: String, _ args: [String]) async -> String {
+    nonisolated static func run(_ path: String, _ args: [String]) async -> String {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)

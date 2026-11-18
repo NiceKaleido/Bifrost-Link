@@ -29,13 +29,15 @@ final class CocoonBridge: ObservableObject {
     @Published private(set) var detected = false
     @Published private(set) var nowPlaying: NowPlaying? {
         didSet {
-            guard let old = oldValue, old.file != nowPlaying?.file || old.package != nowPlaying?.package else { return }
+            guard !resolvingGame, let old = oldValue, old.file != nowPlaying?.file || old.package != nowPlaying?.package else { return }
             let ended = Date()
             Log.write("session ended: \(old.title) after \(Int(ended.timeIntervalSince(old.started) / 60)) min")
             onSessionEnded?(old, ended)
         }
     }
     var onSessionEnded: ((NowPlaying, Date) -> Void)?
+    /// Set while an emulator session gets its game filled in, so that isn't treated as a new session.
+    private var resolvingGame = false
     private var serial: String?
     private var root: String?
     private var task: Task<Void, Never>?
@@ -50,6 +52,7 @@ final class CocoonBridge: ObservableObject {
         task = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.poll()
+                await self?.resolveRetroArch()
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
@@ -104,6 +107,25 @@ final class CocoonBridge: ObservableObject {
         if let icon = await loadIcon(system: launch.system, file: launch.file, serial: serial, root: root) {
             playing.icon = icon
             if nowPlaying?.file == playing.file { nowPlaying = playing }
+        }
+    }
+
+    /// A game started inside RetroArch (not from Cocoon) shows up as just RetroArch; its history says which game it is.
+    private func resolveRetroArch() async {
+        guard let serial, let playing = nowPlaying, playing.package == RetroArchData.package, playing.file.isEmpty,
+              let path = await RetroArchData.currentGame(serial: serial, since: playing.started),
+              nowPlaying?.package == RetroArchData.package, nowPlaying?.file.isEmpty == true else { return }
+        let file = (path as NSString).lastPathComponent
+        let system = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        var game = NowPlaying(title: RetroArchData.cleanTitle((file as NSString).deletingPathExtension), file: file, system: system,
+                              package: playing.package, player: playing.player, icon: nil, started: playing.started)
+        resolvingGame = true
+        nowPlaying = game
+        resolvingGame = false
+        Log.write("session started: \(game.title) (\(system), RetroArch, opened without Cocoon)")
+        if let root, let icon = await loadIcon(system: system, file: file, serial: serial, root: root), nowPlaying?.file == file {
+            game.icon = icon
+            nowPlaying = game
         }
     }
 
