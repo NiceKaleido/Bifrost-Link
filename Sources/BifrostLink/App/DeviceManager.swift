@@ -620,7 +620,7 @@ final class DeviceManager: ObservableObject {
         updater.reset(serial: nil)
         ports.reset(serial: nil)
         apps.reset(serial: nil)
-        homeProfile = nil
+        restoreHomeProfile()
         battery = nil
         screenApps = [:]
         lidClosed = false
@@ -879,19 +879,26 @@ final class DeviceManager: ObservableObject {
     private func nowPlayingChanged(_ playing: NowPlaying?) {
         applyControllerProfile()
         if let playing {
-            if homeProfile == nil { homeProfile = LayoutProfile(settings: settings) }
             if let profile = LayoutProfiles.get(LayoutProfiles.gameKey(playing)) ?? (playing.isApp ? nil : LayoutProfiles.get(LayoutProfiles.systemKey(playing.system))) {
+                if homeProfile == nil { homeProfile = LayoutProfile(settings: settings) }
                 profile.apply(to: settings)
                 showToast("rectangle.3.group", "Using your layout for \(playing.title)")
-            } else if let home = homeProfile, playing.isApp {
-                home.apply(to: settings)
-            } else if !playing.isApp {
-                showToast("gamecontroller", "Now playing \(playing.title)")
+            } else {
+                // No saved layout: go back to your own settings and leave them alone, so changes made now stick.
+                restoreHomeProfile()
+                if !playing.isApp { showToast("gamecontroller", "Now playing \(playing.title)") }
             }
-        } else if let home = homeProfile {
-            home.apply(to: settings)
-            homeProfile = nil
+        } else {
+            restoreHomeProfile()
         }
+    }
+
+    /// Puts back the settings that were in place before a game's saved layout took over.
+    /// Must also run on unlink, or the game's layout (cinema mode included) stays saved as your own.
+    private func restoreHomeProfile() {
+        guard let home = homeProfile else { return }
+        homeProfile = nil
+        home.apply(to: settings)
     }
 
     enum ProfileScope { case game, system }
