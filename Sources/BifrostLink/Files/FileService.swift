@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 struct RemoteFile: Identifiable, Hashable {
     let name: String
@@ -25,6 +26,12 @@ struct RemoteFile: Identifiable, Hashable {
         default: return "doc"
         }
     }
+}
+
+struct FileClipboard {
+    let files: [RemoteFile]
+    let cut: Bool
+    var pathsText: String { files.map(\.path).joined(separator: "\n") }
 }
 
 struct Transfer: Identifiable {
@@ -57,6 +64,9 @@ final class FileService: ObservableObject {
     @Published private(set) var largest: [RemoteFile] = []
     @Published private(set) var scanningLargest = false
     private var sizeCache: [String: [String: Int64]] = [:]
+    @Published private(set) var clipboard: FileClipboard?
+    @Published private(set) var pasting: String?
+    @Published var pasteError: String?
     @Published private(set) var volumes: [Place] = []
     @Published private(set) var space: [VolumeSpace] = []
 
@@ -143,6 +153,7 @@ final class FileService: ObservableObject {
         path = "/sdcard"
         entries = []
         transfers = []
+        clipboard = nil
         volumes = []
         space = []
         if serial != nil {
@@ -305,6 +316,98 @@ final class FileService: ObservableObject {
         largest.removeAll { file in files.contains { $0.path == file.path } }
         await reload()
         await loadSpace()
+    }
+
+    func copyToClipboard(_ files: [RemoteFile], cut: Bool) {
+        guard !files.isEmpty else { return }
+        let clip = FileClipboard(files: files, cut: cut)
+        clipboard = clip
+        // Replaces whatever Finder files were on the pasteboard, so ⌘V pastes these.
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(clip.pathsText, forType: .string)
+    }
+
+    func clearClipboard() {
+        clipboard = nil
+    }
+
+    func isCut(_ file: RemoteFile) -> Bool {
+        guard let clipboard, clipboard.cut else { return false }
+        return clipboard.files.contains { $0.path == file.path }
+    }
+
+    /// ⌘V: files copied in Finder get uploaded; otherwise whatever was copied or
+    /// cut on the device is pasted.
+    func pasteFromPasteboard(into dir: String? = nil) async {
+        let pb = NSPasteboard.general
+        let macFiles = (pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if !macFiles.isEmpty {
+            upload(macFiles, to: dir)
+            return
+        }
+        await paste(into: dir)
+    }
+
+    func paste(into dir: String? = nil) async {
+        guard let serial, let clip = clipboard, pasting == nil else { return }
+        let dest = dir ?? path
+        var taken = Set(dest == path ? entries.map(\.name) : await names(in: dest, serial: serial))
+        var commands: [String] = []
+        var refused: [String] = []
+        for file in clip.files {
+            if file.isDirectory && (dest == file.path || dest.hasPrefix(file.path + "/")) {
+                refused.append(file.name)
+                continue
+            }
+            let parent = (file.path as NSString).deletingLastPathComponent
+            if clip.cut && parent == dest { continue }
+            let name = Self.freeName(file.name, isDirectory: file.isDirectory, taken: taken)
+            taken.insert(name)
+            let target = (dest as NSString).appendingPathComponent(name)
+            commands.append("\(clip.cut ? "mv" : "cp -R") \(ADB.quote(file.path)) \(ADB.quote(target)) || fail=1")
+        }
+        if commands.isEmpty {
+            if clip.cut && refused.isEmpty { clipboard = nil }
+            if !refused.isEmpty { pasteError = "A folder can’t be \(clip.cut ? "moved" : "copied") into itself." }
+            return
+        }
+        let label = commands.count == 1 ? "“\(clip.files.first { !refused.contains($0.name) }?.name ?? "")”" : "\(commands.count) items"
+        pasting = "\(clip.cut ? "Moving" : "Copying") \(label)…"
+        let script = "fail=0; " + commands.joined(separator: "; ") + "; exit $fail"
+        let result = try? await ADB.shared.run(["shell", script], serial: serial, timeout: 3 * 3600)
+        pasting = nil
+        if result?.ok == true {
+            if clip.cut { clipboard = nil }
+            if !refused.isEmpty { pasteError = "A folder can’t be \(clip.cut ? "moved" : "copied") into itself, so it was skipped." }
+        } else {
+            let detail = result?.stderr.split(separator: "\n").last.map(String.init) ?? "The \(DeviceInfo.name) didn’t answer."
+            pasteError = "Some items couldn’t be \(clip.cut ? "moved" : "copied"). \(detail)"
+            Log.write("paste failed: \(result?.stderr ?? "no result")")
+        }
+        sizeCache.removeAll()
+        await reload()
+        await loadSpace()
+    }
+
+    private func names(in dir: String, serial: String) async -> [String] {
+        let target = dir.hasSuffix("/") ? dir : dir + "/"
+        guard let result = try? await ADB.shared.run(["shell", "ls -A \(ADB.quote(target))"], serial: serial, timeout: 20) else { return [] }
+        return result.stdout.split(separator: "\n").map(String.init)
+    }
+
+    /// Finder-style names: “Photo copy.png”, “Photo copy 2.png”, …
+    nonisolated static func freeName(_ name: String, isDirectory: Bool, taken: Set<String>) -> String {
+        guard taken.contains(name) else { return name }
+        let ext = isDirectory ? "" : (name as NSString).pathExtension
+        let base = ext.isEmpty ? name : (name as NSString).deletingPathExtension
+        let suffix = ext.isEmpty ? "" : ".\(ext)"
+        var candidate = "\(base) copy\(suffix)"
+        var n = 2
+        while taken.contains(candidate) {
+            candidate = "\(base) copy \(n)\(suffix)"
+            n += 1
+        }
+        return candidate
     }
 
     func upload(_ urls: [URL], to remoteDir: String? = nil) {

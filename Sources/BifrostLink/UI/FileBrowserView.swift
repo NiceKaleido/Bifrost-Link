@@ -20,11 +20,22 @@ struct FileBrowserView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let pasting = files.pasting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(pasting).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.bottom, 8)
+            }
             Divider().opacity(0.5)
             list
             if !selection.isEmpty { selectionBar }
         }
 
+        .alert(files.pasteError ?? "", isPresented: Binding(get: { files.pasteError != nil }, set: { if !$0 { files.pasteError = nil } })) {
+            Button("OK", role: .cancel) {}
+        }
         .alert("New Folder", isPresented: $showNewFolder) {
             TextField("Name", text: $newFolderName)
             Button("Create") { Task { await files.makeFolder(newFolderName) } }
@@ -97,6 +108,19 @@ struct FileBrowserView: View {
                 Button(action: pickUpload) { Label("Upload…", systemImage: "square.and.arrow.up") }
                     .help("Send files from your Mac into this folder. You can also drop them on the list")
                 Button { newFolderName = ""; showNewFolder = true } label: { Label("New Folder", systemImage: "folder.badge.plus") }
+                if let clip = files.clipboard {
+                    Button { Task { await files.paste() } } label: {
+                        Label(clip.files.count == 1 ? "Paste “\(clip.files[0].name)”" : "Paste \(clip.files.count) Items", systemImage: clip.cut ? "arrow.right.doc.on.clipboard" : "doc.on.clipboard")
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .disabled(files.pasting != nil)
+                    .help(clip.cut ? "Move here (⌘V)" : "Copy here (⌘V)")
+                    Button { files.clearClipboard() } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Forget what was copied")
+                        .accessibilityLabel("Forget what was copied")
+                }
                 Spacer(minLength: 4)
                 Toggle(isOn: $files.sizeMode) {
                     Label(files.measuring ? "Measuring…" : "Sizes", systemImage: "chart.bar.xaxis")
@@ -135,6 +159,9 @@ struct FileBrowserView: View {
                 .help("Download to \(shortPath(settings.downloadFolder))")
             Menu {
                 Button("Download To…") { downloadTo(chosen) }
+                Divider()
+                Button("Copy") { files.copyToClipboard(chosen, cut: false) }
+                Button("Cut") { files.copyToClipboard(chosen, cut: true); selection.removeAll() }
                 if chosen.count == 1, let file = chosen.first {
                     Button("Rename…") {
                         renaming = nil
@@ -195,11 +222,27 @@ struct FileBrowserView: View {
                             size: files.sizeMode ? files.size(of: file) : nil,
                             fraction: files.sizeMode && files.largestEntrySize > 0 ? Double(files.size(of: file) ?? 0) / Double(files.largestEntrySize) : nil,
                             measuring: files.sizeMode && files.measuring && file.isDirectory && files.size(of: file) == nil)
+                        .opacity(files.isCut(file) ? 0.45 : 1)
                         .tag(file.id)
                 }
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
+            .onCopyCommand {
+                files.copyToClipboard(selectedFiles, cut: false)
+                return files.clipboard.map { [NSItemProvider(object: $0.pathsText as NSString)] } ?? []
+            }
+            .onCutCommand {
+                files.copyToClipboard(selectedFiles, cut: true)
+                selection.removeAll()
+                return files.clipboard.map { [NSItemProvider(object: $0.pathsText as NSString)] } ?? []
+            }
+            .onPasteCommand(of: [.fileURL, .utf8PlainText]) { _ in
+                Task { await files.pasteFromPasteboard() }
+            }
+            .onDeleteCommand {
+                if !selection.isEmpty { confirmDelete = true }
+            }
             .contextMenu(forSelectionType: String.self) { ids in
                 let targets = files.entries.filter { ids.contains($0.id) }
                 if targets.count == 1, let file = targets.first, file.isDirectory {
@@ -208,8 +251,22 @@ struct FileBrowserView: View {
                 if !targets.isEmpty {
                     Button("Download") { files.download(targets, to: URL(fileURLWithPath: settings.downloadFolder)) }
                     Button("Download To…") { downloadTo(targets) }
+                    Divider()
+                    Button("Copy") { files.copyToClipboard(targets, cut: false) }
+                    Button("Cut") { files.copyToClipboard(targets, cut: true); selection.removeAll() }
+                }
+                if let clip = files.clipboard, files.pasting == nil {
+                    if targets.count == 1, let folder = targets.first, folder.isDirectory {
+                        Button("Paste Into “\(folder.name)”") { Task { await files.paste(into: folder.path) } }
+                    } else if targets.isEmpty {
+                        Button(clip.files.count == 1 ? "Paste" : "Paste \(clip.files.count) Items") { Task { await files.paste() } }
+                    }
+                }
+                if targets.isEmpty {
+                    Button("New Folder…") { newFolderName = ""; showNewFolder = true }
                 }
                 if targets.count == 1, let file = targets.first {
+                    Divider()
                     Button("Rename…") {
                         renaming = nil
                         renameText = file.name
