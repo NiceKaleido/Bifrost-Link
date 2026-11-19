@@ -679,10 +679,24 @@ final class DeviceManager: ObservableObject {
             if awake == nil { awake = trulyAwake ? current : RadioState(wifi: true, bluetooth: current.bluetooth) }
         }
         _ = try? await ADB.shared.shell("am force-stop com.med.sleepmanager", serial: serial)
+        await clearStickyBatterySaver(serial: serial)
         let radios = awake ?? RadioState(wifi: true, bluetooth: false)
         _ = try? await ADB.shared.shell(radios.shell, serial: serial, timeout: 10)
         Log.write("sleep manager paused, radios wifi=\(radios.wifi) bt=\(radios.bluetooth)")
         return radios.shell + "; cmd deviceidle tempwhitelist -d 15000 com.med.sleepmanager >/dev/null 2>&1; am broadcast -n com.med.sleepmanager/.service.BootReceiver >/dev/null 2>&1"
+    }
+
+    /// Sleep Manager turns Battery Saver on for sleep with `cmd power set-mode 1`, which Android
+    /// treats as a manual switch and marks "sticky". Plugging in pauses Battery Saver but keeps the
+    /// sticky flag, and Sleep Manager can drop its ownership without clearing it, so Android switched
+    /// Battery Saver back on every time the cable came out. Linking means the Thor is in use and
+    /// charging, so a sticky flag left over at this point is cleared.
+    private func clearStickyBatterySaver(serial: String) async {
+        let state = (try? await ADB.shared.shell("echo $(settings get global low_power) $(settings get global low_power_sticky)", serial: serial, timeout: 10)) ?? ""
+        let values = state.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard values.count == 2, values[1] == "1" else { return }
+        _ = try? await ADB.shared.shell("settings put global low_power_sticky 0", serial: serial, timeout: 10)
+        Log.write("battery saver: cleared sticky flag left from sleep (low_power=\(values[0]))")
     }
 
     func shutdown() async {
