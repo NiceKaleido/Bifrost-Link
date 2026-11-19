@@ -161,7 +161,7 @@ extension ScreenController: VideoStreamDelegate {
         Task { @MainActor in self.size = size }
     }
 
-    nonisolated func videoStream(_ stream: VideoStream, didDecode pixelBuffer: CVPixelBuffer, arrival: CFTimeInterval) {
+    nonisolated func videoStream(_ stream: VideoStream, didDecode pixelBuffer: CVPixelBuffer, arrival: CFTimeInterval, pts: Double) {
         frameLock.lock()
         lastFrame = pixelBuffer
         frameCount &+= 1
@@ -170,7 +170,7 @@ extension ScreenController: VideoStreamDelegate {
         frameLock.unlock()
         if first { Task { @MainActor in self.hasFrame = true } }
         stats.decoded()
-        view.renderer.render(pixelBuffer, arrival: arrival)
+        view.renderer.render(pixelBuffer, arrival: arrival, pts: pts)
     }
 
     nonisolated func videoStream(_ stream: VideoStream, didReceiveCompressed sample: CMSampleBuffer, keyFrame: Bool) {

@@ -166,14 +166,63 @@ final class MetalContext: @unchecked Sendable {
     }
 }
 
+/// De-jitters presentation: frames reach the Mac unevenly (encoder, USB and decoder
+/// timing all wobble), and presenting each one the moment it's decoded means two can
+/// land in the same refresh — one is never shown and the next refresh repeats a frame.
+/// Instead each frame is shown at its capture time on the Thor plus a steady delay
+/// just large enough to absorb the recent jitter.
+final class FramePacer {
+    private var offsets: [Double] = []
+    private var next = 0
+    private let window = 180
+    private let warmup = 20
+    private let maxBuffer = 0.030
+    private(set) var bufferMs: Double = 0
+
+    func reset() {
+        offsets.removeAll(keepingCapacity: true)
+        next = 0
+        bufferMs = 0
+    }
+
+    /// When to present a frame captured at `pts` (device clock, seconds) that finished
+    /// decoding at `ready` (Mac clock). nil means present right away.
+    func presentTime(pts: Double, ready: CFTimeInterval) -> CFTimeInterval? {
+        let offset = ready - pts
+        // The device clock restarted (new encoder after a rotation or resize): start over.
+        if let base = offsets.min(), abs(offset - base) > 0.5 { reset() }
+        if offsets.count < window {
+            offsets.append(offset)
+        } else {
+            offsets[next] = offset
+            next = (next + 1) % window
+        }
+        guard offsets.count >= warmup else { return nil }
+        let sorted = offsets.sorted()
+        let base = sorted[0]
+        let spread = min(maxBuffer, sorted[Int(Double(sorted.count - 1) * 0.95)] - base)
+        bufferMs = spread * 1000
+        let target = pts + base + spread
+        return target > CACurrentMediaTime() + 0.0005 ? target : nil
+    }
+}
+
 final class MetalRenderer: @unchecked Sendable {
+    private struct Frame {
+        let buffer: CVPixelBuffer
+        let arrival: CFTimeInterval
+        let pts: Double
+        let ready: CFTimeInterval
+    }
+
     let layer = CAMetalLayer()
     private let context = MetalContext.shared
     private let queue = DispatchQueue(label: "bifrost.render", qos: .userInteractive)
     private let lock = NSLock()
-    private var pending: CVPixelBuffer?
-    private var pendingStamp: CFTimeInterval = 0
+    private var frames: [Frame] = []
     private var scheduled = false
+    private let pacer = FramePacer()
+    private var smoothingEnabled = true
     private var rgbTexture: MTLTexture?
     private var scaledTexture: MTLTexture?
     private var scaler: MTLFXSpatialScaler?
@@ -189,7 +238,19 @@ final class MetalRenderer: @unchecked Sendable {
         layer.isOpaque = true
         layer.backgroundColor = CGColor(gray: 0, alpha: 1)
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
-        layer.maximumDrawableCount = 2
+        // Three so a frame scheduled a few ms ahead doesn't stall the next one.
+        layer.maximumDrawableCount = 3
+    }
+
+    var smoothing: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return smoothingEnabled }
+        set { lock.lock(); smoothingEnabled = newValue; lock.unlock() }
+    }
+
+    /// Delay currently added to absorb frame-timing jitter, in milliseconds.
+    var bufferMs: Double {
+        lock.lock(); defer { lock.unlock() }
+        return smoothingEnabled ? pacer.bufferMs : 0
     }
 
     var upscaling: Bool {
@@ -219,10 +280,11 @@ final class MetalRenderer: @unchecked Sendable {
         if changed { redraw() }
     }
 
-    func render(_ buffer: CVPixelBuffer, arrival: CFTimeInterval) {
+    func render(_ buffer: CVPixelBuffer, arrival: CFTimeInterval, pts: Double) {
         lock.lock()
-        pending = buffer
-        pendingStamp = arrival
+        frames.append(Frame(buffer: buffer, arrival: arrival, pts: pts, ready: CACurrentMediaTime()))
+        // Never let a backlog build up: past three waiting frames, the oldest go.
+        if frames.count > 3 { frames.removeFirst(frames.count - 3) }
         let needsSchedule = !scheduled
         scheduled = true
         lock.unlock()
@@ -238,23 +300,29 @@ final class MetalRenderer: @unchecked Sendable {
             guard let self else { return }
             self.lock.lock()
             self.rgbTexture = nil
-            self.pending = nil
+            self.frames.removeAll()
+            self.pacer.reset()
             self.lock.unlock()
             self.draw(buffer: nil, stamp: 0)
         }
     }
 
     private func drawPending() {
-        lock.lock()
-        let buffer = pending
-        let stamp = pendingStamp
-        pending = nil
-        scheduled = false
-        lock.unlock()
-        draw(buffer: buffer, stamp: stamp)
+        while true {
+            lock.lock()
+            guard !frames.isEmpty else {
+                scheduled = false
+                lock.unlock()
+                return
+            }
+            let frame = frames.removeFirst()
+            let at = smoothingEnabled ? pacer.presentTime(pts: frame.pts, ready: frame.ready) : nil
+            lock.unlock()
+            draw(buffer: frame.buffer, stamp: frame.arrival, at: at)
+        }
     }
 
-    private func draw(buffer: CVPixelBuffer?, stamp: CFTimeInterval) {
+    private func draw(buffer: CVPixelBuffer?, stamp: CFTimeInterval, at presentTime: CFTimeInterval? = nil) {
         guard let commandBuffer = context.queue.makeCommandBuffer() else { return }
         lock.lock()
         var source = rgbTexture
@@ -291,9 +359,14 @@ final class MetalRenderer: @unchecked Sendable {
             encoder.endEncoding()
         }
         if stamp > 0, let onPresented {
-            drawable.addPresentedHandler { _ in onPresented(stamp) }
+            // presentedTime is 0 when the compositor skipped this drawable, so those count as dropped.
+            drawable.addPresentedHandler { shown in if shown.presentedTime > 0 { onPresented(stamp) } }
         }
-        commandBuffer.present(drawable)
+        if let presentTime {
+            commandBuffer.present(drawable, atTime: presentTime)
+        } else {
+            commandBuffer.present(drawable)
+        }
         commandBuffer.commit()
     }
 

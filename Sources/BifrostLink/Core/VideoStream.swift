@@ -21,7 +21,7 @@ enum VideoCodecKind: String, CaseIterable, Identifiable {
 
 protocol VideoStreamDelegate: AnyObject {
     func videoStream(_ stream: VideoStream, didChangeSize size: CGSize)
-    func videoStream(_ stream: VideoStream, didDecode pixelBuffer: CVPixelBuffer, arrival: CFTimeInterval)
+    func videoStream(_ stream: VideoStream, didDecode pixelBuffer: CVPixelBuffer, arrival: CFTimeInterval, pts: Double)
     func videoStream(_ stream: VideoStream, didReceiveCompressed sample: CMSampleBuffer, keyFrame: Bool)
     func videoStreamDidEnd(_ stream: VideoStream)
 }
@@ -250,7 +250,7 @@ final class VideoStream: @unchecked Sendable {
             self.arrivalLock.lock()
             let arrival = self.arrivals.removeValue(forKey: pts.value) ?? CACurrentMediaTime()
             self.arrivalLock.unlock()
-            self.delegate?.videoStream(self, didDecode: imageBuffer, arrival: arrival)
+            self.delegate?.videoStream(self, didDecode: imageBuffer, arrival: arrival, pts: Double(pts.value) / Double(pts.timescale))
         }
         if status == kVTInvalidSessionErr, let format = formatDescription {
             invalidateSession()

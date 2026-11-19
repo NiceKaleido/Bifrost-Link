@@ -171,6 +171,9 @@ final class DeviceManager: ObservableObject {
         settings.$cinemaMode.sink { [weak self] on in
             self?.updateAmbient(on)
         }.store(in: &cancellables)
+        settings.$smoothMotion.sink { [weak self] on in
+            self?.screens.forEach { $0.view.renderer.smoothing = on }
+        }.store(in: &cancellables)
         settings.$upscaling.sink { [weak self] on in
             self?.screens.forEach { $0.view.renderer.upscaling = on }
         }.store(in: &cancellables)
@@ -319,6 +322,7 @@ final class DeviceManager: ObservableObject {
             s.owner = self
             s.view.hoverEnabled = settings.hoverEnabled
             s.view.renderer.upscaling = settings.upscaling
+            s.view.renderer.smoothing = settings.smoothMotion
             s.onEnded = { [weak self, weak s] in
                 guard let self, let s, self.screens.contains(where: { $0 === s }) else { return }
                 Task { await self.unlink(reason: "\(s.role.title) stream ended") }
@@ -1148,7 +1152,7 @@ final class DeviceManager: ObservableObject {
                 if AudioStream.debug {
                     for screen in self.screens {
                         if let st = screen.statsSnapshot {
-                            Log.write("stats \(screen.role.rawValue): \(Int(st.fps)) fps recv \(Int(st.receivedFps)) \(String(format: "%.1f", st.mbps)) Mbit/s \(Int(st.latencyMs)) ms dropped \(st.dropped) \(st.resolution) upscaling \(self.settings.upscaling)")
+                            Log.write("stats \(screen.role.rawValue): \(Int(st.fps)) fps recv \(Int(st.receivedFps)) \(String(format: "%.1f", st.mbps)) Mbit/s \(Int(st.latencyMs)) ms dropped \(st.dropped) buffer \(String(format: "%.1f", screen.view.renderer.bufferMs)) ms \(st.resolution) upscaling \(self.settings.upscaling)")
                         }
                     }
                 }

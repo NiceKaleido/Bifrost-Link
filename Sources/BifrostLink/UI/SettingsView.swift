@@ -52,6 +52,8 @@ struct SettingsView: View {
         Form {
             Section("Look") {
                 Toggle("Sharper picture with MetalFX upscaling", isOn: $settings.upscaling)
+                Toggle("Smooth out uneven frame timing", isOn: $settings.smoothMotion)
+                    .help("Evens out frames that arrive bunched up, so motion doesn’t stutter. Adds only as much delay as the connection’s wobble needs, at most 30 ms.")
                 Toggle("Cinema mode", isOn: $settings.cinemaMode)
                 Toggle("Show the stats overlay", isOn: $settings.statsOverlay)
             }

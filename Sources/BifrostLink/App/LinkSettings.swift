@@ -67,6 +67,7 @@ final class LinkSettings: ObservableObject {
     @Published var overlayOpacity: Double { didSet { defaults.set(overlayOpacity, forKey: "overlayOpacity") } }
     @Published var cinemaMode: Bool { didSet { defaults.set(cinemaMode, forKey: "cinemaMode") } }
     @Published var upscaling: Bool { didSet { defaults.set(upscaling, forKey: "upscaling") } }
+    @Published var smoothMotion: Bool { didSet { defaults.set(smoothMotion, forKey: "smoothMotion") } }
     @Published var statsOverlay: Bool { didSet { defaults.set(statsOverlay, forKey: "statsOverlay") } }
     @Published var replayEnabled: Bool { didSet { defaults.set(replayEnabled, forKey: "replayEnabled") } }
     @Published var replaySeconds: Int { didSet { defaults.set(replaySeconds, forKey: "replaySeconds") } }
@@ -154,6 +155,7 @@ final class LinkSettings: ObservableObject {
         overlayOpacity = value("overlayOpacity", 1.0)
         cinemaMode = value("cinemaMode", false)
         upscaling = value("upscaling", true)
+        smoothMotion = value("smoothMotion", true)
         statsOverlay = value("statsOverlay", false)
         replayEnabled = value("replayEnabled", false)
         replaySeconds = value("replaySeconds", 30)

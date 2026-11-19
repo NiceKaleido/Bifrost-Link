@@ -89,9 +89,6 @@ final class ScreenView: NSView {
         return true
     }
 
-    func display(_ pixelBuffer: CVPixelBuffer, arrival: CFTimeInterval) {
-        renderer.render(pixelBuffer, arrival: arrival)
-    }
 
     func clear() {
         renderer.clear()
