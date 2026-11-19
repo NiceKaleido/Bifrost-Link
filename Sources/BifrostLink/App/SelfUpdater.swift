@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CryptoKit
+import SwiftUI
 
 struct BifrostRelease: Equatable {
     let version: String
@@ -88,30 +89,101 @@ final class SelfUpdater: ObservableObject {
     }
 
     private func alert(_ title: String, _ text: String) {
+        hideProgressPanel()
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text
         alert.runModal()
     }
 
+    @Published private(set) var progress: Double?
+    private var downloadTask: URLSessionDownloadTask?
+    private var cancelled = false
+    private var progressPanel: NSPanel?
+
+    func cancelInstall() {
+        cancelled = true
+        downloadTask?.cancel()
+    }
+
+    private func showProgressPanel() {
+        guard progressPanel == nil else { progressPanel?.orderFrontRegardless(); return }
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 96),
+                            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = "Updating Bifrost Link"
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView = NSHostingView(rootView: UpdateProgressView(updater: self).preferredColorScheme(.dark))
+        panel.center()
+        panel.orderFrontRegardless()
+        progressPanel = panel
+    }
+
+    private func hideProgressPanel() {
+        progressPanel?.close()
+        progressPanel = nil
+    }
+
+    private func download(_ url: URL, to destination: URL) async -> Bool {
+        await withCheckedContinuation { continuation in
+            var observation: NSKeyValueObservation?
+            let task = URLSession.shared.downloadTask(with: url) { temp, response, _ in
+                observation?.invalidate()
+                guard let temp, (response as? HTTPURLResponse)?.statusCode == 200,
+                      (try? FileManager.default.moveItem(at: temp, to: destination)) != nil else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                continuation.resume(returning: true)
+            }
+            observation = task.progress.observe(\.fractionCompleted) { progress, _ in
+                let fraction = progress.fractionCompleted
+                Task { @MainActor in self.progress = fraction }
+            }
+            downloadTask = task
+            task.resume()
+        }
+    }
+
     func install(_ release: BifrostRelease) async {
+        guard installing == nil else { return }
         installing = "Downloading \(release.version)…"
-        defer { installing = nil }
+        progress = 0
+        cancelled = false
+        showProgressPanel()
+        var handedOff = false
+        defer {
+            downloadTask = nil
+            if !handedOff {
+                installing = nil
+                progress = nil
+                hideProgressPanel()
+            }
+        }
         let work = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches/BifrostLink/update")
         try? FileManager.default.removeItem(at: work)
         try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let dmg = work.appendingPathComponent("Bifrost-Link.dmg")
-        guard let (temp, response) = try? await URLSession.shared.download(from: release.dmg),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              (try? FileManager.default.moveItem(at: temp, to: dmg)) != nil else {
+        guard await download(release.dmg, to: dmg) else {
+            if cancelled {
+                Log.write("update: download cancelled")
+                return
+            }
+            hideProgressPanel()
             alert("Update failed", "The download didn’t complete.")
             return
         }
+        downloadTask = nil
+        installing = "Checking \(release.version)…"
+        progress = nil
         if let expected = release.digest?.lowercased(), await PortCatalog.sha256(dmg) != expected {
             alert("Update stopped", "The download doesn’t match the release’s checksum, so nothing was changed.")
             return
         }
         installing = "Preparing \(release.version)…"
+        progress = nil
         let mount = work.appendingPathComponent("mount")
         try? FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
         guard Self.run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-noautoopen", "-noverify", "-mountpoint", mount.path, dmg.path]) == 0 else {
@@ -144,7 +216,12 @@ final class SelfUpdater: ObservableObject {
         launcher.arguments = ["-c", "nohup /bin/sh \"\(script.path)\" >/dev/null 2>&1 &"]
         try? launcher.run()
         launcher.waitUntilExit()
-        NSApp.terminate(nil)
+        installing = "Restarting…"
+        handedOff = true
+        // Terminate from a fresh run-loop turn, not from inside this main-actor task:
+        // applicationShouldTerminate replies via another main-actor task, which can't
+        // run while this one is still on the stack, so calling terminate here deadlocks.
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
     }
 
     nonisolated private static func run(_ path: String, _ args: [String]) -> Int32 {
@@ -156,5 +233,30 @@ final class SelfUpdater: ObservableObject {
         do { try process.run() } catch { return -1 }
         process.waitUntilExit()
         return process.terminationStatus
+    }
+}
+
+private struct UpdateProgressView: View {
+    @ObservedObject var updater: SelfUpdater
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(updater.installing ?? "Updating…").font(.callout.weight(.medium))
+            if let progress = updater.progress {
+                ProgressView(value: progress)
+            } else {
+                ProgressView().progressViewStyle(.linear)
+            }
+            HStack {
+                Text(updater.progress.map { "\(Int($0 * 100))%" } ?? "Bifrost restarts by itself when it’s done.")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Spacer()
+                if updater.progress != nil {
+                    Button("Cancel") { updater.cancelInstall() }.controlSize(.small)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
     }
 }

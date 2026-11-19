@@ -63,9 +63,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !LinkSettings.shared.showMenuBar }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        var replied = false
+        let reply = {
+            guard !replied else { return }
+            replied = true
+            sender.reply(toApplicationShouldTerminate: true)
+        }
         Task { @MainActor in
             await DeviceManager.shared.shutdown()
-            sender.reply(toApplicationShouldTerminate: true)
+            reply()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            if !replied { Log.write("quit: shutdown took too long, quitting anyway") }
+            reply()
         }
         return .terminateLater
     }
