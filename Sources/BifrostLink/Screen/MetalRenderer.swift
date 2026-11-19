@@ -223,6 +223,9 @@ final class MetalRenderer: @unchecked Sendable {
     private var scheduled = false
     private let pacer = FramePacer()
     private var smoothingEnabled = true
+    /// Latest time a paced frame was queued to appear; immediate redraws go after it so they
+    /// aren't overtaken by older frames still waiting their turn.
+    private var lastScheduled: CFTimeInterval = 0
     private var rgbTexture: MTLTexture?
     private var scaledTexture: MTLTexture?
     private var scaler: MTLFXSpatialScaler?
@@ -292,7 +295,16 @@ final class MetalRenderer: @unchecked Sendable {
     }
 
     func redraw() {
-        queue.async { [weak self] in self?.draw(buffer: nil, stamp: 0) }
+        queue.async { [weak self] in self?.draw(buffer: nil, stamp: 0, at: self?.afterScheduled()) }
+    }
+
+    func resetPacing() {
+        lock.lock(); pacer.reset(); lock.unlock()
+    }
+
+    private func afterScheduled() -> CFTimeInterval? {
+        lock.lock(); defer { lock.unlock() }
+        return lastScheduled > CACurrentMediaTime() ? lastScheduled + 0.001 : nil
     }
 
     func clear() {
@@ -303,7 +315,7 @@ final class MetalRenderer: @unchecked Sendable {
             self.frames.removeAll()
             self.pacer.reset()
             self.lock.unlock()
-            self.draw(buffer: nil, stamp: 0)
+            self.draw(buffer: nil, stamp: 0, at: self.afterScheduled())
         }
     }
 
@@ -315,8 +327,16 @@ final class MetalRenderer: @unchecked Sendable {
                 lock.unlock()
                 return
             }
-            let frame = frames.removeFirst()
+            let frame: Frame
+            if smoothingEnabled {
+                frame = frames.removeFirst()
+            } else {
+                // Unpaced: only the newest frame can be seen, so skip the rest.
+                frame = frames.removeLast()
+                frames.removeAll()
+            }
             let at = smoothingEnabled ? pacer.presentTime(pts: frame.pts, ready: frame.ready) : nil
+            if let at { lastScheduled = max(lastScheduled, at) }
             lock.unlock()
             draw(buffer: frame.buffer, stamp: frame.arrival, at: at)
         }

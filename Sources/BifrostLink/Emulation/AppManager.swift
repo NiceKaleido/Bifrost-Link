@@ -201,11 +201,14 @@ final class AppManager: ObservableObject {
             } else if ext == "apks" || ext == "xapk" || ext == "apkm" {
                 let folder = FileManager.default.temporaryDirectory.appendingPathComponent("bifrost-apks-\(UUID().uuidString)")
                 try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-                process.arguments = ["-q", "-o", url.path, "*.apk", "-d", folder.path]
-                try? process.run()
-                process.waitUntilExit()
+                // Bundles can be hundreds of MB; unzip off the main thread so the app stays responsive.
+                await Task.detached(priority: .userInitiated) {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+                    process.arguments = ["-q", "-o", url.path, "*.apk", "-d", folder.path]
+                    try? process.run()
+                    process.waitUntilExit()
+                }.value
                 let apks = (FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []).filter { $0.pathExtension.lowercased() == "apk" }
                 _ = await install(apks: apks, title: url.deletingPathExtension().lastPathComponent)
                 try? FileManager.default.removeItem(at: folder)

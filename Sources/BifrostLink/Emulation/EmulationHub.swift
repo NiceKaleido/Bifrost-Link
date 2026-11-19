@@ -136,7 +136,7 @@ final class EmulationHub: ObservableObject {
                 if RomPatcher.isPatch(url) {
                     patches.append(url)
                 } else {
-                    roms.append(romItem(url))
+                    roms.append(await romItem(url))
                 }
             }
             var patched: [ImportItem] = []
@@ -162,8 +162,9 @@ final class EmulationHub: ObservableObject {
         }
     }
 
-    private func romItem(_ url: URL) -> ImportItem {
-        let (candidates, _) = Systems.detect(localFile: url)
+    private func romItem(_ url: URL) async -> ImportItem {
+        // Detection can run chdman on a CHD, so keep it off the main thread.
+        let (candidates, _) = await Task.detached(priority: .userInitiated) { Systems.detect(localFile: url) }.value
         let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         let preferred = candidates.first { folders[$0] != nil } ?? "unsorted"
         return ImportItem(url: url, size: size, candidates: candidates, system: preferred)
@@ -181,7 +182,7 @@ final class EmulationHub: ObservableObject {
 
     func pair(_ patch: URL, withLocal rom: URL) {
         unpairedPatches.removeAll { $0 == patch }
-        importItems.insert(patchItem(patch, rom: romItem(rom)), at: 0)
+        Task { importItems.insert(patchItem(patch, rom: await romItem(rom)), at: 0) }
     }
 
     func pair(_ patch: URL, withRemote path: String) async {
@@ -196,7 +197,7 @@ final class EmulationHub: ObservableObject {
             toast?("exclamationmark.triangle", "Couldn’t copy \(local.lastPathComponent) from the \(DeviceInfo.name)")
             return
         }
-        var rom = romItem(local)
+        var rom = await romItem(local)
         let folder = (path as NSString).deletingLastPathComponent
         if let system = folders.first(where: { $0.value.path == folder })?.key { rom.system = system }
         rom.remoteSource = path

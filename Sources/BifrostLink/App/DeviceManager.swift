@@ -290,9 +290,22 @@ final class DeviceManager: ObservableObject {
             guard let self else { return }
             do {
                 try await self.performLink(serial: serial)
+                // Unlinked (or unplugged) while linking: performUnlink already tore down and
+                // moved on, so don't resurrect a "linked" state with no screens behind it.
+                guard !Task.isCancelled else {
+                    Log.write("link cancelled")
+                    // Clean up anything started after the unlink's teardown, unless a new link
+                    // is already under way (its teardown would kill that one).
+                    if self.linkTask == nil && self.state == .searching { await self.teardown() }
+                    return
+                }
                 self.state = .linked
                 Log.write("linked \(serial)")
             } catch {
+                guard !Task.isCancelled else {
+                    Log.write("link cancelled")
+                    return
+                }
                 Log.write("link failed: \(error.localizedDescription)")
                 await self.teardown()
                 self.state = .failed(error.localizedDescription)
@@ -314,6 +327,7 @@ final class DeviceManager: ObservableObject {
         if settings.pauseSleepManager, let part = await pauseSleepManager(serial: serial) {
             cleanupParts.append(part)
         }
+        await clearStickyBatterySaver(serial: serial)
         let cleanupShell: String? = cleanupParts.joined(separator: "; ")
 
         var list = [ScreenController(role: .top, displayId: main.id, size: main.size)]
@@ -679,7 +693,6 @@ final class DeviceManager: ObservableObject {
             if awake == nil { awake = trulyAwake ? current : RadioState(wifi: true, bluetooth: current.bluetooth) }
         }
         _ = try? await ADB.shared.shell("am force-stop com.med.sleepmanager", serial: serial)
-        await clearStickyBatterySaver(serial: serial)
         let radios = awake ?? RadioState(wifi: true, bluetooth: false)
         _ = try? await ADB.shared.shell(radios.shell, serial: serial, timeout: 10)
         Log.write("sleep manager paused, radios wifi=\(radios.wifi) bt=\(radios.bluetooth)")
@@ -692,9 +705,10 @@ final class DeviceManager: ObservableObject {
     /// Battery Saver back on every time the cable came out. Linking means the Thor is in use and
     /// charging, so a sticky flag left over at this point is cleared.
     private func clearStickyBatterySaver(serial: String) async {
-        let state = (try? await ADB.shared.shell("echo $(settings get global low_power) $(settings get global low_power_sticky)", serial: serial, timeout: 10)) ?? ""
+        let state = (try? await ADB.shared.shell("echo $(settings get global low_power) $(settings get global low_power_sticky) $(pm list packages com.med.sleepmanager | grep -c sleepmanager)", serial: serial, timeout: 10)) ?? ""
         let values = state.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard values.count == 2, values[1] == "1" else { return }
+        // Only with Sleep Manager installed: without it a sticky flag is the user's own choice.
+        guard values.count == 3, values[1] == "1", values[2] != "0" else { return }
         _ = try? await ADB.shared.shell("settings put global low_power_sticky 0", serial: serial, timeout: 10)
         Log.write("battery saver: cleared sticky flag left from sleep (low_power=\(values[0]))")
     }

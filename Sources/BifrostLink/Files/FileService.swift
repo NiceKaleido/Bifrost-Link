@@ -305,6 +305,7 @@ final class FileService: ObservableObject {
         guard let serial, !newName.isEmpty, newName != file.name else { return }
         let target = ((file.path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(newName)
         _ = try? await ADB.shared.shell("mv \(ADB.quote(file.path)) \(ADB.quote(target))", serial: serial)
+        forgetFromClipboard([file.path])
         await reload()
     }
 
@@ -312,6 +313,7 @@ final class FileService: ObservableObject {
         guard let serial, !files.isEmpty else { return }
         let list = files.map { ADB.quote($0.path) }.joined(separator: " ")
         _ = try? await ADB.shared.shell("rm -rf \(list)", serial: serial, timeout: 120)
+        forgetFromClipboard(files.map(\.path))
         sizeCache.removeAll()
         largest.removeAll { file in files.contains { $0.path == file.path } }
         await reload()
@@ -329,6 +331,13 @@ final class FileService: ObservableObject {
 
     func clearClipboard() {
         clipboard = nil
+    }
+
+    private func forgetFromClipboard(_ paths: [String]) {
+        guard let clip = clipboard else { return }
+        let gone = { (file: RemoteFile) in paths.contains { file.path == $0 || file.path.hasPrefix($0 + "/") } }
+        let remaining = clip.files.filter { !gone($0) }
+        clipboard = remaining.isEmpty ? nil : FileClipboard(files: remaining, cut: clip.cut)
     }
 
     func isCut(_ file: RemoteFile) -> Bool {
@@ -351,8 +360,10 @@ final class FileService: ObservableObject {
     func paste(into dir: String? = nil) async {
         guard let serial, let clip = clipboard, pasting == nil else { return }
         let dest = dir ?? path
-        var taken = Set(dest == path ? entries.map(\.name) : await names(in: dest, serial: serial))
+        // Always read the destination fresh, hidden files included; `entries` can be stale or filtered.
+        var taken = Set(await names(in: dest, serial: serial))
         var commands: [String] = []
+        var moving: [String] = []
         var refused: [String] = []
         for file in clip.files {
             if file.isDirectory && (dest == file.path || dest.hasPrefix(file.path + "/")) {
@@ -363,21 +374,24 @@ final class FileService: ObservableObject {
             if clip.cut && parent == dest { continue }
             let name = Self.freeName(file.name, isDirectory: file.isDirectory, taken: taken)
             taken.insert(name)
+            moving.append(file.name)
             let target = (dest as NSString).appendingPathComponent(name)
-            commands.append("\(clip.cut ? "mv" : "cp -R") \(ADB.quote(file.path)) \(ADB.quote(target)) || fail=1")
+            // -n: never overwrite, even if the name check above missed something.
+            commands.append("\(clip.cut ? "mv -n" : "cp -Rn") \(ADB.quote(file.path)) \(ADB.quote(target)) || fail=1")
         }
         if commands.isEmpty {
             if clip.cut && refused.isEmpty { clipboard = nil }
             if !refused.isEmpty { pasteError = "A folder can’t be \(clip.cut ? "moved" : "copied") into itself." }
             return
         }
-        let label = commands.count == 1 ? "“\(clip.files.first { !refused.contains($0.name) }?.name ?? "")”" : "\(commands.count) items"
+        let label = moving.count == 1 ? "“\(moving[0])”" : "\(moving.count) items"
         pasting = "\(clip.cut ? "Moving" : "Copying") \(label)…"
         let script = "fail=0; " + commands.joined(separator: "; ") + "; exit $fail"
         let result = try? await ADB.shared.run(["shell", script], serial: serial, timeout: 3 * 3600)
         pasting = nil
+        // Whatever was cut has moved (or partly moved); the old paths are no longer worth pasting.
+        if clip.cut { clipboard = nil }
         if result?.ok == true {
-            if clip.cut { clipboard = nil }
             if !refused.isEmpty { pasteError = "A folder can’t be \(clip.cut ? "moved" : "copied") into itself, so it was skipped." }
         } else {
             let detail = result?.stderr.split(separator: "\n").last.map(String.init) ?? "The \(DeviceInfo.name) didn’t answer."
@@ -391,7 +405,9 @@ final class FileService: ObservableObject {
 
     private func names(in dir: String, serial: String) async -> [String] {
         let target = dir.hasSuffix("/") ? dir : dir + "/"
-        guard let result = try? await ADB.shared.run(["shell", "ls -A \(ADB.quote(target))"], serial: serial, timeout: 20) else { return [] }
+        guard let result = try? await ADB.shared.run(["shell", "ls -A \(ADB.quote(target))"], serial: serial, timeout: 20) else {
+            return dir == path ? entries.map(\.name) : []
+        }
         return result.stdout.split(separator: "\n").map(String.init)
     }
 

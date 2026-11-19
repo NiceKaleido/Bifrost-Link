@@ -158,6 +158,8 @@ final class ScreenController: ObservableObject, ScreenInputDelegate {
 extension ScreenController: VideoStreamDelegate {
     nonisolated func videoStream(_ stream: VideoStream, didChangeSize size: CGSize) {
         sizeStorage = size
+        // A new size means a new encoder session with its own clock.
+        view.renderer.resetPacing()
         Task { @MainActor in self.size = size }
     }
 

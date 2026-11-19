@@ -140,7 +140,7 @@ final class SelfUpdater: ObservableObject {
             }
             observation = task.progress.observe(\.fractionCompleted) { progress, _ in
                 let fraction = progress.fractionCompleted
-                Task { @MainActor in self.progress = fraction }
+                Task { @MainActor in if self.downloadTask != nil { self.progress = fraction } }
             }
             downloadTask = task
             task.resume()
@@ -186,13 +186,13 @@ final class SelfUpdater: ObservableObject {
         progress = nil
         let mount = work.appendingPathComponent("mount")
         try? FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-        guard Self.run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-noautoopen", "-noverify", "-mountpoint", mount.path, dmg.path]) == 0 else {
+        guard await Self.runDetached("/usr/bin/hdiutil", ["attach", "-nobrowse", "-noautoopen", "-noverify", "-mountpoint", mount.path, dmg.path]) == 0 else {
             alert("Update failed", "The disk image couldn’t be opened.")
             return
         }
         let staged = work.appendingPathComponent("Bifrost Link.app")
-        let copied = Self.run("/usr/bin/ditto", [mount.appendingPathComponent("Bifrost Link.app").path, staged.path]) == 0
-        _ = Self.run("/usr/bin/hdiutil", ["detach", mount.path, "-quiet"])
+        let copied = await Self.runDetached("/usr/bin/ditto", [mount.appendingPathComponent("Bifrost Link.app").path, staged.path]) == 0
+        _ = await Self.runDetached("/usr/bin/hdiutil", ["detach", mount.path, "-quiet"])
         guard copied else {
             alert("Update failed", "The new app couldn’t be copied out of the disk image.")
             return
@@ -222,6 +222,10 @@ final class SelfUpdater: ObservableObject {
         // applicationShouldTerminate replies via another main-actor task, which can't
         // run while this one is still on the stack, so calling terminate here deadlocks.
         NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
+
+    nonisolated private static func runDetached(_ path: String, _ args: [String]) async -> Int32 {
+        await Task.detached(priority: .userInitiated) { run(path, args) }.value
     }
 
     nonisolated private static func run(_ path: String, _ args: [String]) -> Int32 {
