@@ -53,6 +53,8 @@ jobs:
             echo "No signing certificate secret, building ad-hoc signed"
             exit 0
           fi
+          # A secret pasted from a file can carry a trailing newline, which breaks the password.
+          P12_PASSWORD="$(printf '%s' "$P12_PASSWORD" | tr -d '\r\n')"
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
           echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
