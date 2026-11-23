@@ -4,6 +4,16 @@ ROOT="${0:A:h:h}"
 cd "$ROOT"
 APP="$ROOT/build/Bifrost Link.app"
 
+# Sign with the self-signed "Bifrost Link Self-Signed" certificate so every build, local or from the
+# release workflow, has the same identity: macOS then keeps things tied to it, like "Open at login",
+# across updates. Without the certificate (fresh machine, CI without the secret) fall back to ad-hoc.
+SIGN_ID="${BIFROST_SIGN_IDENTITY:-Bifrost Link Self-Signed}"
+if ! security find-identity -p codesigning 2>/dev/null | grep -qF "\"$SIGN_ID\""; then
+  echo "warning: signing identity \"$SIGN_ID\" not found, signing ad-hoc" >&2
+  SIGN_ID="-"
+fi
+sign() { codesign --force --sign "$SIGN_ID" --timestamp=none "$@"; }
+
 if [[ ! -f Resources/bifrost-server.jar ]]; then
   ./server/build.sh
 fi
@@ -67,9 +77,10 @@ for tool in chdman xdelta3; do
     bundle_tool "$TOOL_PATH" "$APP/Contents/Resources/tools"
   fi
 done
-if [[ -d "$APP/Contents/Resources/tools" ]]; then
-  for f in "$APP/Contents/Resources/tools"/*; do codesign --force --sign - "$f" >/dev/null 2>&1; done
-fi
+# Helpers first (inside-out), then the app itself further down.
+for f in "$APP/Contents/Resources/adb" "$APP/Contents/Resources/tools"/*(N); do
+  [[ -f "$f" ]] && sign "$f"
+done
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -92,8 +103,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
-echo "Built $APP"
+sign "$APP"
+codesign --verify --deep --strict "$APP"
+echo "Built $APP (signed: $([[ "$SIGN_ID" == "-" ]] && echo ad-hoc || echo "$SIGN_ID"))"
 if [[ "$1" == "--dmg" ]]; then
   DMG="$ROOT/build/Bifrost-Link-${BIFROST_VERSION:-1.0}.dmg"
   STAGE="$(mktemp -d)"
