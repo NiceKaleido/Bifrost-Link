@@ -336,6 +336,7 @@ struct DeviceControls: View {
             Button { manager.press(AndroidKey.back) } label: { Label("Back", systemImage: "chevron.backward") }.help("Back (right click)")
             Button { manager.press(AndroidKey.home) } label: { Label("Home", systemImage: "circle") }.help("Home (middle click)")
             Button { manager.press(AndroidKey.appSwitch) } label: { Label("Recents", systemImage: "square.on.square") }.help("Recent apps")
+            Button { manager.pressAynButton() } label: { Label("AYN Menu", systemImage: "gamecontroller") }.help("AYN menu, like the AYN button on the Thor")
             Button { manager.closeForegroundApp() } label: { Label("Close App", systemImage: "xmark.app") }.help("Close the app in front (⌃⌘W)")
         }
 

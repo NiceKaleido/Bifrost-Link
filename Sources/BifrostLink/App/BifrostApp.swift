@@ -137,6 +137,7 @@ struct BifrostApp: App {
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("Recent Apps") { manager.press(AndroidKey.appSwitch) }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("AYN Menu") { manager.pressAynButton() }
                 Button("Notifications") { manager.expandNotifications() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("Rotate") { manager.rotate() }

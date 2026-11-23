@@ -883,6 +883,26 @@ final class DeviceManager: ObservableObject {
         focusedScreen?.control?.rotate()
     }
 
+    /// Opens the AYN menu. The AYN button is KEY_F24 on the Thor's "gpio-keys" device, which Android
+    /// maps to plain Home; AYN's game assistant tells it apart by the device it comes from. So an
+    /// injected key would just go home, and the press is written into that input device instead,
+    /// exactly as the hardware button does. The device is looked up by name because event numbers
+    /// can change between boots.
+    func pressAynButton() {
+        guard let serial, state == .linked else { return }
+        let script = """
+        for e in /sys/class/input/event*; do [ "$(cat $e/device/name 2>/dev/null)" = gpio-keys ] && d=/dev/input/${e##*/}; done; \
+        [ -n "$d" ] && { sendevent $d 1 194 1; sendevent $d 0 0 0; sleep 0.1; sendevent $d 1 194 0; sendevent $d 0 0 0; echo ok; }
+        """
+        Task {
+            let result = (try? await ADB.shared.shell(script, serial: serial, timeout: 5)) ?? ""
+            if !result.contains("ok") {
+                Log.write("ayn button: couldn't find the gpio-keys device")
+                showToast("exclamationmark.triangle", "Couldn’t open the AYN menu")
+            }
+        }
+    }
+
     func expandNotifications() {
         screen(.top)?.control?.expandNotifications()
     }
