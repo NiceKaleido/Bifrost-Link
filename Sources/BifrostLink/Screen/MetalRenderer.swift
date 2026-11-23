@@ -171,18 +171,37 @@ final class MetalContext: @unchecked Sendable {
 /// land in the same refresh — one is never shown and the next refresh repeats a frame.
 /// Instead each frame is shown at its capture time on the Thor plus a steady delay
 /// just large enough to absorb the recent jitter.
+///
+/// The delay is also phase-locked to the Mac's refresh: if capture time + delay sits
+/// right on a refresh tick, a fraction of a millisecond of wobble decides which refresh
+/// a frame lands on, so neighbours end up doubled and skipped. The delay is held steady
+/// and only moved (by a whole step, or to re-centre between ticks) when it has to be.
 final class FramePacer {
     private var offsets: [Double] = []
     private var next = 0
     private let window = 180
     private let warmup = 20
     private let maxBuffer = 0.030
+    /// Delay actually applied (capture time on the Thor -> display time on the Mac, both clocks).
+    private var delay: Double?
+    /// Running average of where frames fall between refresh ticks, as a unit vector.
+    private var phaseX = 0.0, phaseY = 0.0
+    /// Refresh grid: one tick we know happened, and the spacing between ticks.
+    private var vsyncRef: CFTimeInterval = 0
+    var refreshInterval: Double = 0
     private(set) var bufferMs: Double = 0
 
     func reset() {
         offsets.removeAll(keepingCapacity: true)
         next = 0
         bufferMs = 0
+        delay = nil
+        phaseX = 0; phaseY = 0
+    }
+
+    /// A drawable really reached the screen at `time`: that's a refresh tick.
+    func presented(at time: CFTimeInterval) {
+        if time > vsyncRef { vsyncRef = time }
     }
 
     /// When to present a frame captured at `pts` (device clock, seconds) that finished
@@ -200,10 +219,57 @@ final class FramePacer {
         guard offsets.count >= warmup else { return nil }
         let sorted = offsets.sorted()
         let base = sorted[0]
-        let spread = min(maxBuffer, sorted[Int(Double(sorted.count - 1) * 0.95)] - base)
-        bufferMs = spread * 1000
-        let target = pts + base + spread
-        return target > CACurrentMediaTime() + 0.0005 ? target : nil
+        let needed = base + min(maxBuffer, sorted[Int(Double(sorted.count - 1) * 0.95)] - base)
+        let now = CACurrentMediaTime()
+
+        let period = refreshInterval
+        guard period > 0.002, vsyncRef > 0, now - vsyncRef < 5 else {
+            // No refresh grid known yet: plain jitter buffer.
+            delay = needed
+            bufferMs = (needed - base) * 1000
+            let target = pts + needed
+            return target > now + 0.0005 ? target : nil
+        }
+
+        var applied = delay ?? needed
+        // Too little delay to absorb the jitter: grow at once. Far more than needed: give a
+        // whole refresh back, which keeps the phase where it is.
+        if applied < needed {
+            applied = needed
+            phaseX = 0; phaseY = 0
+        } else if applied - needed > period + 0.002 {
+            applied -= period * ((applied - needed - 0.002) / period).rounded(.down)
+        }
+
+        // Where this frame falls between ticks: 0 = on a tick, 0.5 = halfway between.
+        func phase(_ t: Double) -> Double {
+            let x = (t - vsyncRef) / period
+            return x - x.rounded(.down)
+        }
+        let p = phase(pts + applied)
+        phaseX = phaseX * 0.9 + cos(2 * .pi * p) * 0.1
+        phaseY = phaseY * 0.9 + sin(2 * .pi * p) * 0.1
+        var mean = atan2(phaseY, phaseX) / (2 * .pi)
+        if mean < 0 { mean += 1 }
+        // Settled close to a tick: shift the delay so frames sit halfway between ticks.
+        // Clock drift between the Thor and the Mac brings this back now and then; each
+        // re-centre costs at most one repeated frame instead of a run of them.
+        let settled = phaseX * phaseX + phaseY * phaseY > 0.25
+        if settled, mean < 0.2 || mean > 0.8 {
+            var shift = (mean - 0.5) * period
+            if applied + shift < needed { shift += period }
+            applied += shift
+            phaseX = -1; phaseY = 0 // now centred at 0.5
+        }
+        delay = applied
+        bufferMs = (applied - base) * 1000
+
+        // Ask for a time a quarter-refresh before the tick the frame belongs to, so the request
+        // itself never lands on a boundary, whatever rounding the compositor applies.
+        let raw = pts + applied
+        let tick = raw + (1 - phase(raw)) * period
+        let target = tick - period * 0.25
+        return target > now + 0.0005 ? target : nil
     }
 }
 
@@ -298,6 +364,12 @@ final class MetalRenderer: @unchecked Sendable {
         queue.async { [weak self] in self?.draw(buffer: nil, stamp: 0, at: self?.afterScheduled()) }
     }
 
+    /// Seconds between refreshes of the display the view is on (0 if unknown).
+    var refreshInterval: Double {
+        get { lock.lock(); defer { lock.unlock() }; return pacer.refreshInterval }
+        set { lock.lock(); pacer.refreshInterval = newValue; lock.unlock() }
+    }
+
     func resetPacing() {
         lock.lock(); pacer.reset(); lock.unlock()
     }
@@ -378,9 +450,14 @@ final class MetalRenderer: @unchecked Sendable {
             }
             encoder.endEncoding()
         }
-        if stamp > 0, let onPresented {
+        let onPresented = stamp > 0 ? self.onPresented : nil
+        drawable.addPresentedHandler { [weak self] shown in
             // presentedTime is 0 when the compositor skipped this drawable, so those count as dropped.
-            drawable.addPresentedHandler { shown in if shown.presentedTime > 0 { onPresented(stamp) } }
+            guard shown.presentedTime > 0 else { return }
+            if let self {
+                self.lock.lock(); self.pacer.presented(at: shown.presentedTime); self.lock.unlock()
+            }
+            onPresented?(stamp)
         }
         if let presentTime {
             commandBuffer.present(drawable, atTime: presentTime)

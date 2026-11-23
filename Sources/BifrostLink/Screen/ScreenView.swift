@@ -74,6 +74,29 @@ final class ScreenView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         renderer.resize(bounds.size, scale: window?.backingScaleFactor ?? 2)
+        updateRefreshInterval()
+    }
+
+    private var screenObservers: [NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        screenObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        screenObservers = []
+        updateRefreshInterval()
+        guard let window else { return }
+        // Moving to another display, or changing its refresh rate in System Settings.
+        let update: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateRefreshInterval() }
+        }
+        screenObservers = [
+            NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main, using: update),
+            NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: update),
+        ]
+    }
+
+    private func updateRefreshInterval() {
+        renderer.refreshInterval = window?.screen?.minimumRefreshInterval ?? 0
     }
 
     override func updateTrackingAreas() {

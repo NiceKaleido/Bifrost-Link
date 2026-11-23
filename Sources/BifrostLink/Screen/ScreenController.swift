@@ -77,7 +77,11 @@ final class ScreenController: ObservableObject, ScreenInputDelegate {
             "display_id": "\(displayId)",
             "video_codec": settings.codec.rawValue,
             "video_bit_rate": "\(settings.bitrateMbps * 1_000_000)",
-            "max_fps": "\(settings.maxFps)",
+            // Android's encoder-side limiter drops any frame that comes even a little early, and a
+            // 60 fps game regularly delivers frames 12-14 ms apart, so a cap of exactly 60 cost
+            // ~2% of frames as random hitches. With headroom it only drops frames that really
+            // exceed the chosen rate (120 fps content still comes out at 60).
+            "max_fps": "\(settings.maxFps * 3 / 2)",
             "stay_awake": "true",
             "power_on": "true",
             "clipboard_autosync": primary ? "true" : "false",
