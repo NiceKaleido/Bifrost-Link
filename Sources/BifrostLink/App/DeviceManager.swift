@@ -126,7 +126,7 @@ final class DeviceManager: ObservableObject {
         apps.names = { [weak self] package in
             guard let self else { return nil }
             if package == CocoonBridge.package { return "Cocoon" }
-            return self.ports.ports.first { $0.forks.contains { $0.package == package } }?.name
+            return self.ports.ports.first { $0.forks.contains { $0.package == package } }?.name ?? self.stats.displayName(package: package)
         }
         apps.kinds = { [weak self] package in
             guard let self else { return nil }
@@ -142,6 +142,7 @@ final class DeviceManager: ObservableObject {
         backups.toast = toastHandler
         cleanup.toast = toastHandler
         updater.toast = toastHandler
+        updater.labels = { [weak self] package in await self?.stats.label(for: package) }
         backups.loadSnapshots()
         cocoon.$nowPlaying.removeDuplicates { $0?.file == $1?.file && $0?.package == $1?.package }.dropFirst().sink { [weak self] playing in
             DispatchQueue.main.async { self?.nowPlayingChanged(playing) }

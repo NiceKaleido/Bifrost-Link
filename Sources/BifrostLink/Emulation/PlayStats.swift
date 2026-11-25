@@ -321,6 +321,15 @@ final class PlayStats: ObservableObject {
     static func key(for session: PlaySession) -> String { session.file.isEmpty ? "app:" + session.package : "game:" + session.file }
 
     /// How Play Time names an Android app: the user's rename, else the app's real label.
+    /// The app's own name, read from its APK once and remembered.
+    func label(for package: String) async -> String? {
+        if let name = displayName(package: package) { return name }
+        guard let serial, let label = await Self.label(of: package, serial: serial) else { return nil }
+        labels[package] = label
+        save(labels, to: labelsFile)
+        return label
+    }
+
     func displayName(package: String) -> String? {
         customNames["app:" + package] ?? labels[package]
     }

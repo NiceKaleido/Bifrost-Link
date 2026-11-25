@@ -14,7 +14,13 @@ struct SideloadedApp: Identifiable, Hashable {
 
     var updateAvailable: Bool {
         guard let latestTag, assetURL != nil else { return false }
-        let tag = latestTag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        var tag = latestTag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        // One release can ship APKs with their own versions (SleepManager v0.8.0 includes Helper 1.1.7):
+        // then the version in the file name is the one to compare.
+        if let asset = assetName?.range(of: #"\d+(\.\d+)+"#, options: .regularExpression).map({ String(assetName![$0]) }),
+           !tag.contains(asset), !asset.contains(tag) {
+            tag = asset
+        }
         return !installedVersion.contains(tag) && !tag.contains(installedVersion)
     }
 }
@@ -27,8 +33,21 @@ final class EmulatorUpdater: ObservableObject {
     var serial: String?
     var toast: ((String, String) -> Void)?
 
+    /// Where sideloaded apps publish their APKs on GitHub. A repo the user sets wins over these.
     static let knownRepos: [String: String] = [
         "com.armsx2": "ARMSX2/ARMSX2",
+        "dev.nxnative.android.peanuts": "igawa6/peanuts-native",
+        "io.github.kyannon.gbads": "kyannon/gba-ds",
+        "me.magnum.melondualds": "SapphireRhodonite/WatermelonDS",
+        "com.stormpanda.betterdualscreenassistant": "stormpanda/better-dual-screen-assistant",
+        "com.rfandango.haku_x": "rfandango/hakuX",
+        "com.aure.clustertune": "AurelioB/ClusterTune",
+        "org.pkforge.app": "sofianeelhor/PKForge",
+        "com.med.sleepmanager": "Baggio94/SleepManager",
+        "com.med.sleepmanager.helper": "Baggio94/SleepManager",
+        "com.twinlore.app": "alpha-minus/game-twin",
+        "dev.shulkds.client": "NaiSenshin/ShulkDS",
+        "io.github.cia3ds": "Hinoaaaaaf212/cia3ds-android",
     ]
 
     static let knownNames: [String: String] = Dictionary(uniqueKeysWithValues: Emulators.all.map { ($0.package, $0.name) }).merging([
@@ -53,6 +72,8 @@ final class EmulatorUpdater: ObservableObject {
     }
 
     var excludedPackages: Set<String> = []
+    /// The app's own name from its APK ("Hades" rather than "Port" from com.hades.port).
+    var labels: ((String) async -> String?)?
 
     func reset(serial: String?) {
         self.serial = serial
@@ -84,13 +105,16 @@ final class EmulatorUpdater: ObservableObject {
         defer { checking = false }
         let list = (try? await ADB.shared.shell("pm list packages -3 -i", serial: serial, timeout: 20)) ?? ""
         var sideloaded: [String] = []
+        var selfUpdating = Set<String>()
         for line in list.split(separator: "\n") {
             let parts = line.split(separator: " ")
             guard let pkgPart = parts.first, pkgPart.hasPrefix("package:") else { continue }
             let package = String(pkgPart.dropFirst("package:".count))
             let installer = parts.first { $0.hasPrefix("installer=") }.map { String($0.dropFirst("installer=".count)) } ?? "null"
-            if installer != "com.android.vending" && installer != package && !excludedPackages.contains(package) {
+            // Apps that installed themselves (Peanuts, GBA DS…) are listed too: their GitHub release is still the source.
+            if installer != "com.android.vending" && !excludedPackages.contains(package) {
                 sideloaded.append(package)
+                if installer == package { selfUpdating.insert(package) }
             }
         }
         let versionCommand = sideloaded.map { "echo \"\($0)|$(dumpsys package \($0) | grep -m1 versionName | cut -d= -f2)\"" }.joined(separator: "; ")
@@ -100,9 +124,14 @@ final class EmulatorUpdater: ObservableObject {
             let parts = line.split(separator: "|", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { continue }
             let package = parts[0]
-            var app = SideloadedApp(package: package, name: Self.knownNames[package] ?? Self.prettyName(package), installedVersion: parts[1].trimmingCharacters(in: .whitespaces),
+            let label = Self.knownNames[package] == nil ? await labels?(package) : nil
+            var app = SideloadedApp(package: package, name: Self.knownNames[package] ?? label ?? Self.prettyName(package), installedVersion: parts[1].trimmingCharacters(in: .whitespaces),
                                     repo: userRepos[package] ?? Self.knownRepos[package])
-            if let repo = app.repo { await fillRelease(&app, repo: repo) }
+            if let repo = app.repo {
+                await fillRelease(&app, repo: repo)
+            } else if selfUpdating.contains(package) {
+                app.note = "updates itself"
+            }
             result.append(app)
         }
         apps = result.sorted { ($0.updateAvailable ? 0 : 1, $0.repo == nil ? 1 : 0, $0.name.lowercased()) < ($1.updateAvailable ? 0 : 1, $1.repo == nil ? 1 : 0, $1.name.lowercased()) }
@@ -121,9 +150,12 @@ final class EmulatorUpdater: ObservableObject {
         }
         app.latestTag = json["tag_name"] as? String
         let assets = (json["assets"] as? [[String: Any]] ?? []).filter { ($0["name"] as? String ?? "").lowercased().hasSuffix(".apk") }
+        let wantsHelper = app.package.hasSuffix(".helper")
         func score(_ name: String) -> Int {
             let n = name.lowercased()
             var s = 0
+            // One repo, two APKs (SleepManager and its helper): pick the one this package is.
+            if n.contains("helper") { s += wantsHelper ? 20 : -20 }
             if n.contains("a13") || n.contains("sdk33") { s += 6 }
             if n.contains("arm64") || n.contains("v8a") || n.contains("armv8") { s += 3 }
             if n.contains("x86") || n.contains("armeabi-v7a") { s -= 10 }
