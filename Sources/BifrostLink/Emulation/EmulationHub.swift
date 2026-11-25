@@ -65,6 +65,10 @@ final class EmulationHub: ObservableObject {
     @Published private(set) var orphanMedia: [OrphanMedia] = []
     @Published private(set) var orphanEntries: [OrphanEntry] = []
     @Published private(set) var cleaningOrphans = false
+    @Published private(set) var leftovers: [LeftoverGame] = []
+    @Published private(set) var leftoverNotes: [String] = []
+    @Published var leftoverSelection: Set<String> = []
+    @Published private(set) var cleaningLeftovers: String?
     @Published private(set) var bios: [BiosStatus] = []
     @Published var shrinkCandidates: [ShrinkCandidate] = []
     @Published private(set) var scanning = false
@@ -80,6 +84,7 @@ final class EmulationHub: ObservableObject {
 
     var serial: String?
     weak var files: FileService?
+    weak var backups: SaveBackupService?
     var toast: ((String, String) -> Void)?
 
     nonisolated static let tools: [String: String?] = [
@@ -98,6 +103,9 @@ final class EmulationHub: ObservableObject {
         space = []
         orphanMedia = []
         orphanEntries = []
+        leftovers = []
+        leftoverNotes = []
+        leftoverSelection = []
         bios = []
         shrinkCandidates = []
         lastScan = nil
@@ -271,6 +279,7 @@ final class EmulationHub: ObservableObject {
         await scanSpace(serial: serial)
         await scanBios(serial: serial)
         await scanHealth(serial: serial)
+        await scanLeftovers(serial: serial)
         await scanShrinkCandidates()
     }
 
@@ -384,6 +393,45 @@ final class EmulationHub: ObservableObject {
         }
         orphanMedia = media
         orphanEntries = entries
+    }
+
+    private func scanLeftovers(serial: String) async {
+        let result = await LeftoverScanner.scan(serial: serial)
+        guard self.serial == serial else { return }
+        leftovers = LeftoverGame.group(result.items)
+        leftoverNotes = result.notes
+        leftoverSelection = Set(leftovers.map(\.id))
+        Log.write("leftovers: \(leftovers.count) games, \(result.items.count) items, \(result.items.reduce(0) { $0 + $1.bytes } / 1_048_576) MB: " + leftovers.map { "\($0.emulator)/\($0.game)" }.joined(separator: " ; "))
+        for note in result.notes { Log.write("leftovers: \(note)") }
+    }
+
+    /// Backs up the saves and save states on the Mac, then removes everything selected.
+    func cleanLeftovers() async {
+        guard let serial else { return }
+        let games = leftovers.filter { leftoverSelection.contains($0.id) }
+        let items = games.flatMap(\.items)
+        guard !items.isEmpty else { return }
+        defer { cleaningLeftovers = nil }
+        let keep = items.filter { $0.kind != .cache }
+        if !keep.isEmpty {
+            cleaningLeftovers = "Backing up \(keep.count) save file\(keep.count == 1 ? "" : "s")…"
+            guard await backups?.backup(label: "Before leftover cleanup", only: keep.map { (emulator: $0.emulator, remote: $0.path, custom: false) }) != nil else {
+                toast?("exclamationmark.triangle", "The backup didn’t work, so nothing was removed")
+                return
+            }
+        }
+        cleaningLeftovers = "Cleaning…"
+        for package in Set(items.compactMap(\.package)) {
+            _ = try? await ADB.shared.shell("am force-stop \(package)", serial: serial, timeout: 10)
+        }
+        for chunk in stride(from: 0, to: items.count, by: 40) {
+            let paths = items[chunk..<min(chunk + 40, items.count)].map { ADB.quote($0.path) }.joined(separator: " ")
+            _ = try? await ADB.shared.shell("rm -rf \(paths)", serial: serial, timeout: 120)
+        }
+        for item in items { Log.write("leftovers: removed \(item.kind.rawValue) \(item.path)") }
+        let freed = items.reduce(0) { $0 + $1.bytes }
+        toast?("sparkles", "Freed \(freed.bytesText) from \(games.count) game\(games.count == 1 ? "" : "s") that are gone\(keep.isEmpty ? "" : ". Saves are backed up on this Mac")")
+        await scanLeftovers(serial: serial)
     }
 
     func cleanOrphans() async {

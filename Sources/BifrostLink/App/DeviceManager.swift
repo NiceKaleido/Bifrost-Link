@@ -92,6 +92,7 @@ final class DeviceManager: ObservableObject {
     private init() {
         emulation.files = files
         cleanup.backups = backups
+        emulation.backups = backups
         let toastHandler: (String, String) -> Void = { [weak self] symbol, message in self?.showToast(symbol, message) }
         emulation.toast = toastHandler
         ports.toast = toastHandler

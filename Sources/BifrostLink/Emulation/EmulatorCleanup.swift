@@ -142,7 +142,12 @@ final class CleanupService: ObservableObject {
 }
 
 enum SFO {
-    static func title(_ data: Data) -> String? {
+    static func title(_ data: Data) -> String? { value(data, keys: ["SAVEDATA_TITLE", "TITLE"]) }
+
+    /// The game's own title, rather than the save slot's.
+    static func value(_ data: Data, key: String) -> String? { value(data, keys: [key]) }
+
+    private static func value(_ data: Data, keys: Set<String>) -> String? {
         guard data.count > 20, data.prefix(4) == Data([0x00, 0x50, 0x53, 0x46]) else { return nil }
         func u32(_ o: Int) -> Int { Int(data[o]) | Int(data[o + 1]) << 8 | Int(data[o + 2]) << 16 | Int(data[o + 3]) << 24 }
         func u16(_ o: Int) -> Int { Int(data[o]) | Int(data[o + 1]) << 8 }
@@ -156,7 +161,7 @@ enum SFO {
             guard keyOffset < data.count, dataOffset + length <= data.count else { continue }
             let keyEnd = data[keyOffset...].firstIndex(of: 0) ?? data.endIndex
             let key = String(decoding: data[keyOffset..<keyEnd], as: UTF8.self)
-            if key == "SAVEDATA_TITLE" || key == "TITLE" {
+            if keys.contains(key) {
                 let value = String(decoding: data[dataOffset..<(dataOffset + length)], as: UTF8.self)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\0").union(.whitespacesAndNewlines))
                 if !value.isEmpty { return value }

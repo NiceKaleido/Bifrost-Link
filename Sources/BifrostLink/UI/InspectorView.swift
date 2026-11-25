@@ -358,6 +358,7 @@ struct LibraryView: View {
     @State private var dropTargeted = false
     @State private var showOrphans = false
     @State private var confirmOrphans = false
+    @State private var confirmLeftovers = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -386,6 +387,7 @@ struct LibraryView: View {
                     spaceSection
                     biosSection
                     healthSection
+                    leftoverSection
                     shrinkSection
                 }
             }
@@ -636,6 +638,63 @@ struct LibraryView: View {
             Button("Remove \(hub.orphanMedia.count) images and \(hub.orphanEntries.count) entries", role: .destructive) { Task { await hub.cleanOrphans() } }
         } message: {
             Text("Frees \(mediaBytes.bytesText). Rescan in Cocoon afterwards.")
+        }
+    }
+
+    @ViewBuilder
+    private var leftoverSection: some View {
+        let selected = hub.leftovers.filter { hub.leftoverSelection.contains($0.id) }
+        let selectedBytes = selected.reduce(0) { $0 + $1.bytes }
+        let total = hub.leftovers.reduce(0) { $0 + $1.bytes }
+        SectionHeader(title: "Leftover saves & caches", symbol: "externaldrive.badge.xmark", trailing: hub.leftovers.isEmpty ? "all tidy" : total.bytesText)
+        Card {
+            if hub.leftovers.isEmpty {
+                Label("Every save, save state and shader cache still belongs to a game on your \(DeviceInfo.name).", systemImage: "hand.thumbsup")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Text("\(hub.leftovers.count) game\(hub.leftovers.count == 1 ? " is" : "s are") gone, but \(hub.leftovers.count == 1 ? "its" : "their") saves or shader caches are still on the \(DeviceInfo.name).")
+                    .font(.callout)
+                let emulators = Array(Set(hub.leftovers.map(\.emulator))).sorted()
+                ForEach(emulators, id: \.self) { emulator in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(emulator).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(hub.leftovers.filter { $0.emulator == emulator }) { game in
+                            Toggle(isOn: Binding(get: { hub.leftoverSelection.contains(game.id) },
+                                                 set: { if $0 { hub.leftoverSelection.insert(game.id) } else { hub.leftoverSelection.remove(game.id) } })) {
+                                HStack(spacing: 6) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(game.game).font(.callout).lineLimit(1).truncationMode(.middle)
+                                        Text(game.kinds).font(.caption2).foregroundStyle(.tertiary)
+                                    }
+                                    Spacer()
+                                    Text(game.bytes.bytesText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+                HStack {
+                    Button(selected.count == hub.leftovers.count ? "Select None" : "Select All") {
+                        hub.leftoverSelection = selected.count == hub.leftovers.count ? [] : Set(hub.leftovers.map(\.id))
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                    Button(hub.cleaningLeftovers ?? "Clean Up \(selectedBytes.bytesText)") { confirmLeftovers = true }
+                        .controlSize(.small)
+                        .disabled(selected.isEmpty || hub.cleaningLeftovers != nil)
+                }
+                Text("Saves and save states are backed up to this Mac first. Shader caches are just removed.").font(.caption2).foregroundStyle(.tertiary)
+            }
+            ForEach(hub.leftoverNotes, id: \.self) { note in
+                Label(note, systemImage: "info.circle").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .confirmationDialog("Remove leftovers of \(selected.count) game\(selected.count == 1 ? "" : "s")?", isPresented: $confirmLeftovers) {
+            Button("Back Up & Remove", role: .destructive) { Task { await hub.cleanLeftovers() } }
+        } message: {
+            Text("Frees \(selectedBytes.bytesText). Saves and save states go to your save backups on this Mac first, so you can restore them if a game comes back.")
         }
     }
 

@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         manager.emulation.prepareImport([url])
                         Log.write("import test: " + manager.emulation.importItems.map { "\($0.url.lastPathComponent) -> \($0.system) at \(manager.emulation.targetFolder(for: $0.system))" }.joined(separator: ", "))
                         Task { await manager.emulation.performImport() }
+                    case "leftovers":
+                        for game in manager.emulation.leftovers {
+                            Log.write("leftover \(game.emulator): \(game.game) [\(game.kinds)] \(game.bytes / 1024) KB: " + game.items.map { ($0.path as NSString).lastPathComponent }.joined(separator: " ; "))
+                        }
+                        for note in manager.emulation.leftoverNotes { Log.write("leftover note: \(note)") }
                     case "orphans":
                         for (system, list) in Dictionary(grouping: manager.emulation.orphanMedia, by: \.system) {
                             Log.write("orphans \(system): \(list.count) e.g. " + list.prefix(3).map { ($0.path as NSString).lastPathComponent }.joined(separator: " ; "))
