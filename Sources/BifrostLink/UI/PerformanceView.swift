@@ -22,24 +22,41 @@ struct PerfStatus {
     let label: String
     let color: Color
 
+    static let idle = PerfStatus(label: "Idle", color: .secondary)
+
     static func load(_ percent: Double) -> PerfStatus {
         percent >= 90 ? PerfStatus(label: "Maxed", color: PerfPalette.critical)
             : percent >= 70 ? PerfStatus(label: "Busy", color: PerfPalette.warning)
             : PerfStatus(label: "Easy", color: PerfPalette.good)
     }
 
-    static func temperature(_ celsius: Double) -> PerfStatus {
-        celsius >= 85 ? PerfStatus(label: "Hot", color: PerfPalette.critical)
-            : celsius >= 65 ? PerfStatus(label: "Warm", color: PerfPalette.warning)
-            : PerfStatus(label: "Cool", color: PerfPalette.good)
+    /// Chip parts run hot by design; the battery and the case have much lower comfortable limits.
+    static func temperature(_ celsius: Double, kind: ThermalGroup.Kind = .chip) -> PerfStatus {
+        let (warm, hot): (Double, Double) = switch kind {
+        case .chip: (70, 85)
+        case .body: (60, 75)
+        case .battery: (40, 47)
+        }
+        return celsius >= hot ? PerfStatus(label: "Hot", color: PerfPalette.critical)
+            : celsius >= warm ? PerfStatus(label: "Warm", color: PerfPalette.warning)
+            : PerfStatus(label: "Normal", color: PerfPalette.good)
     }
 
-    static func frames(_ fps: Double?, target: Double) -> PerfStatus {
-        guard let fps else { return PerfStatus(label: "Idle", color: .secondary) }
-        let ratio = fps / max(1, target)
+    static func frames(_ snap: DeviceSnapshot) -> PerfStatus {
+        guard let fps = snap.fps else { return .idle }
+        if fps < 1 { return PerfStatus(label: "Paused", color: .secondary) }
+        let ratio = fps / max(1, snap.refreshRate)
+        // A game capped at 30 or 60 fps on a faster display is fine as long as frames come evenly.
         return ratio >= 0.9 ? PerfStatus(label: "Smooth", color: PerfPalette.good)
+            : snap.steady && fps >= 24 ? PerfStatus(label: "Steady", color: PerfPalette.good)
             : ratio >= 0.45 ? PerfStatus(label: "Dipping", color: PerfPalette.warning)
             : PerfStatus(label: "Struggling", color: PerfPalette.critical)
+    }
+
+    static func fan(_ fan: FanReading) -> PerfStatus {
+        fan.rpm == 0 ? PerfStatus(label: "Stopped", color: .secondary)
+            : fan.power >= 0.8 ? PerfStatus(label: "Full", color: PerfPalette.warning)
+            : PerfStatus(label: "Spinning", color: PerfPalette.good)
     }
 }
 
@@ -55,10 +72,14 @@ struct PerformanceView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         measuring(snap)
+                        section("Right now")
                         gauges(snap)
+                        section("Heat & cooling")
+                        heat(snap)
+                        section("Last 2 minutes")
                         charts
+                        section("Details")
                         clocks(snap)
-                        thermals(snap)
                         power(snap)
                         processes(snap)
                         ForEach(manager.screens, id: \.role) { StreamStatsCard(controller: $0) }
@@ -86,23 +107,75 @@ struct PerformanceView: View {
         }
     }
 
-    // MARK: Gauges
+    // MARK: Right now
 
     private func gauges(_ snap: DeviceSnapshot) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-            RingGauge(title: "Frame rate", value: snap.fps.map { String(format: "%.1f", $0) } ?? "—", unit: "fps",
-                      fraction: (snap.fps ?? 0) / max(1, snap.refreshRate), status: PerfStatus.frames(snap.fps, target: snap.refreshRate),
-                      detail: snap.frameTimeMs.map { String(format: "%.1f ms per frame · ", $0) + (snap.jank == 0 ? "no drops" : "\(snap.jank) late") } ?? "no new frames")
+        let fastest = snap.clusters.last
+        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            RingGauge(title: "Frame rate", value: snap.fps.map { String(format: "%.0f", $0) } ?? "—", unit: "fps",
+                      fraction: (snap.fps ?? 0) / max(1, snap.refreshRate), status: .frames(snap),
+                      detail: snap.frameTimeMs.map { String(format: "%.1f ms each", $0) + (snap.jank == 0 ? "" : " · \(snap.jank) late") } ?? "no new frames")
             RingGauge(title: "CPU", value: "\(Int(snap.cpu.rounded()))", unit: "%", fraction: snap.cpu / 100, status: .load(snap.cpu),
-                      detail: snap.cpuTemp.map { "\(Int($0.rounded()))°C" } ?? " ")
+                      detail: fastest.map { "fastest cores \(ghz($0.currentMHz))" } ?? " ")
             RingGauge(title: "GPU", value: "\(Int(snap.gpu.rounded()))", unit: "%", fraction: snap.gpu / 100, status: .load(snap.gpu),
-                      detail: snap.gpuMHz > 0 ? "\(Int(snap.gpuMHz)) MHz" + (snap.gpuTemp.map { " · \(Int($0.rounded()))°C" } ?? "") : " ")
+                      detail: snap.gpuMHz > 0 ? "at \(Int(snap.gpuMHz)) MHz" : " ")
             RingGauge(title: "Memory", value: String(format: "%.1f", snap.memUsedMB / 1024), unit: "GB", fraction: snap.memPercent / 100, status: .load(snap.memPercent),
                       detail: String(format: "of %.0f GB", snap.memTotalMB / 1024) + (snap.swapUsedMB > 1 ? String(format: " · %.1f GB swap", snap.swapUsedMB / 1024) : ""))
         }
     }
 
-    // MARK: Charts
+    // MARK: Heat & cooling
+
+    private func heat(_ snap: DeviceSnapshot) -> some View {
+        let samples = monitor.history
+        let others = snap.thermals.filter { !["CPU", "GPU", "Battery"].contains($0.name) }
+        return card(nil) {
+            HStack(alignment: .top, spacing: 10) {
+                HeroStat(title: "Chip", value: snap.chipTemp.map { "\(Int($0.rounded()))°C" } ?? "—",
+                         status: snap.chipTemp.map { PerfStatus.temperature($0) } ?? .idle,
+                         detail: [snap.cpuTemp.map { "CPU \(Int($0.rounded()))°" }, snap.gpuTemp.map { "GPU \(Int($0.rounded()))°" }].compactMap { $0 }.joined(separator: " · "))
+                if let fan = snap.fan {
+                    HeroStat(title: "Fan", value: fan.rpm.formatted() + " rpm", status: .fan(fan),
+                             detail: [fan.mode.map { "\($0) mode" }, fan.rpm > 0 ? "\(Int((fan.power * 100).rounded()))% power" : nil].compactMap { $0 }.joined(separator: " · "))
+                }
+                HeroStat(title: "Battery", value: snap.batteryTemp.map { "\(Int($0.rounded()))°C" } ?? "—",
+                         status: snap.batteryTemp.map { PerfStatus.temperature($0, kind: .battery) } ?? .idle,
+                         detail: snap.battery.map { "\($0)% charged" } ?? " ")
+            }
+            if !others.isEmpty {
+                Divider().opacity(0.5)
+                VStack(spacing: 7) {
+                    ForEach(others) { sensor in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(sensor.name).font(.callout)
+                                Text(sensor.hint).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                            }
+                            Spacer()
+                            Text("\(Int(sensor.celsius.rounded()))°C").font(.callout.weight(.semibold).monospacedDigit())
+                            StatusChip(status: .temperature(sensor.celsius, kind: sensor.kind)).frame(width: 62, alignment: .leading)
+                        }
+                    }
+                }
+            }
+            Divider().opacity(0.5)
+            let peak = samples.flatMap { [$0.cpuTemp, $0.gpuTemp, $0.batteryTemp].compactMap { $0 } }.max() ?? 60
+            LiveChart(samples: samples, unit: "°C", domain: 20...max(70, (peak / 10).rounded(.up) * 10),
+                      series: [.init(name: "CPU", color: PerfPalette.blue) { $0.cpuTemp },
+                               .init(name: "GPU", color: PerfPalette.orange) { $0.gpuTemp },
+                               .init(name: "Battery", color: PerfPalette.aqua) { $0.batteryTemp }])
+            if snap.fan != nil {
+                let top = samples.compactMap(\.fanRPM).max() ?? 0
+                Text("Fan speed").font(.caption).foregroundStyle(.secondary)
+                LiveChart(samples: samples, unit: "rpm", domain: 0...max(10_000, (top / 2_000).rounded(.up) * 2_000),
+                          series: [.init(name: "Fan", color: PerfPalette.blue) { $0.fanRPM }], filled: true, height: 80)
+            }
+            Text("Up to 85°C is normal for the chip while gaming. The battery is happiest below 45°C.")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: Last 2 minutes
 
     private var charts: some View {
         let samples = monitor.history
@@ -116,13 +189,6 @@ struct PerformanceView: View {
                           series: [.init(name: "CPU", color: PerfPalette.blue) { $0.cpu },
                                    .init(name: "GPU", color: PerfPalette.orange) { $0.gpu },
                                    .init(name: "Memory", color: PerfPalette.aqua) { $0.mem }])
-            }
-            card("Temperature") {
-                let peak = samples.flatMap { [$0.cpuTemp, $0.gpuTemp, $0.batteryTemp].compactMap { $0 } }.max() ?? 60
-                LiveChart(samples: samples, unit: "°C", domain: 20...max(70, (peak / 10).rounded(.up) * 10),
-                          series: [.init(name: "CPU", color: PerfPalette.blue) { $0.cpuTemp },
-                                   .init(name: "GPU", color: PerfPalette.orange) { $0.gpuTemp },
-                                   .init(name: "Battery", color: PerfPalette.aqua) { $0.batteryTemp }])
             }
         }
     }
@@ -139,25 +205,8 @@ struct PerformanceView: View {
                 if snap.gpuMaxMHz > 0 {
                     MeterRow(title: "GPU", subtitle: "up to \(Int(snap.gpuMaxMHz)) MHz", value: "\(Int(snap.gpuMHz)) MHz", fraction: snap.gpuMHz / snap.gpuMaxMHz)
                 }
-            }
-        }
-    }
-
-    private func thermals(_ snap: DeviceSnapshot) -> some View {
-        card("Temperatures") {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(snap.thermals) { sensor in
-                    let status = PerfStatus.temperature(sensor.celsius)
-                    HStack(spacing: 8) {
-                        Text(sensor.name).font(.callout)
-                        Spacer()
-                        Text("\(Int(sensor.celsius.rounded()))°").font(.callout.weight(.semibold).monospacedDigit())
-                        StatusChip(status: status)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
+                Text("Clocks drop when there's little to do, or when the chip gets hot.").font(.caption2).foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -186,7 +235,7 @@ struct PerformanceView: View {
     }
 
     private func processes(_ snap: DeviceSnapshot) -> some View {
-        card("Busiest processes") {
+        card("Busiest apps") {
             if snap.processes.isEmpty {
                 Text("Reading…").font(.caption).foregroundStyle(.secondary)
             } else {
@@ -208,7 +257,7 @@ struct PerformanceView: View {
                                 .animation(.linear(duration: 1), value: process.cpu)
                         }
                     }
-                    Text("Share of all CPU cores.").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("CPU % is a share of all cores; memory is what each app holds.").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -216,15 +265,40 @@ struct PerformanceView: View {
 
     private func ghz(_ mhz: Double) -> String { String(format: "%.2f GHz", mhz / 1000) }
 
-    private func card<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func section(_ title: String) -> some View {
+        Text(title.uppercased()).font(.caption.weight(.semibold)).foregroundStyle(.secondary).kerning(0.6)
+            .padding(.top, 6).padding(.leading, 2)
+    }
+
+    private func card<Content: View>(_ title: String?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline)
+            if let title { Text(title).font(.headline) }
             content()
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline))
+    }
+}
+
+/// A big headline number with its status word, for the few readings that matter most.
+struct HeroStat: View {
+    let title: String
+    let value: String
+    let status: PerfStatus
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .contentTransition(.numericText()).animation(.default, value: value)
+            StatusChip(status: status)
+            Text(detail).font(.caption2).foregroundStyle(.tertiary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -335,6 +409,7 @@ struct LiveChart: View {
     let domain: ClosedRange<Double>
     let series: [Series]
     var filled = false
+    var height: CGFloat = 130
     @State private var hover: Date?
 
     var body: some View {
@@ -346,7 +421,7 @@ struct LiveChart: View {
             TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
                 chart(end: context.date.addingTimeInterval(-1.3))
             }
-            .frame(height: 130)
+            .frame(height: height)
         }
     }
 
@@ -397,7 +472,7 @@ struct LiveChart: View {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                     AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
                     AxisValueLabel {
-                        if let v = value.as(Double.self) { Text("\(Int(v))\(unit == "%" ? "%" : unit == "°C" ? "°" : "")").font(.caption2) }
+                        if let v = value.as(Double.self) { Text(unit == "rpm" ? "\(Int(v / 1000))k" : "\(Int(v))\(unit == "%" ? "%" : unit == "°C" ? "°" : "")").font(.caption2) }
                     }
                 }
             }
@@ -444,6 +519,7 @@ struct LiveChart: View {
         case "%": return "\(Int(v.rounded()))%"
         case "°C": return "\(Int(v.rounded()))°C"
         case "fps": return String(format: "%.1f fps", v)
+        case "rpm": return "\(Int(v.rounded()).formatted()) rpm"
         default: return "\(Int(v.rounded())) \(unit)"
         }
     }

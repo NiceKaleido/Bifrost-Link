@@ -72,7 +72,7 @@ struct DeviceHUDLine: View {
         if let snap = monitor.snapshot {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 0) {
-                    Text(snap.fps.map { String(format: "%.1f", $0) } ?? "—").foregroundStyle(PerfStatus.frames(snap.fps, target: snap.refreshRate).color)
+                    Text(snap.fps.map { String(format: "%.1f", $0) } ?? "—").foregroundStyle(PerfStatus.frames(snap).color)
                     Text(" fps on \(DeviceInfo.name)")
                     if let ms = snap.frameTimeMs { Text(String(format: " · %.1f ms", ms)).foregroundStyle(.white.opacity(0.65)) }
                 }

@@ -9,9 +9,23 @@ struct CPUCluster: Hashable, Identifiable {
 }
 
 struct ThermalGroup: Hashable, Identifiable {
+    enum Kind: Hashable { case chip, body, battery }
     let name: String
     let celsius: Double
+    var kind: Kind = .chip
+    /// What the part does, in a few words.
+    var hint = ""
     var id: String { name }
+}
+
+/// The Thor's fan, from AYN's fan driver (`/sys/class/gpio5_pwm2`).
+struct FanReading: Hashable {
+    /// Measured by the fan's tachometer.
+    let rpm: Int
+    /// PWM duty cycle, 0…1: how hard the fan is being driven.
+    let power: Double
+    /// AYN's fan setting (Settings › Fan control), when known.
+    var mode: String?
 }
 
 struct ProcessLoad: Hashable, Identifiable {
@@ -28,6 +42,8 @@ struct DeviceSnapshot: Equatable {
     var frameTimeMs: Double?
     var worstFrameMs: Double?
     var jank = 0
+    /// Frames arrive at an even pace (a game capped at 30 or 60 fps), even if below the display's rate.
+    var steady = false
     var measuring: String?
     var cpu: Double = 0
     var clusters: [CPUCluster] = []
@@ -44,6 +60,7 @@ struct DeviceSnapshot: Equatable {
     var battery: Int?
     var batteryStatus = ""
     var batteryTemp: Double?
+    var fan: FanReading?
     /// Battery draw; nil when the fuel gauge doesn't report current (the Thor reports 0).
     var watts: Double?
     /// Power coming in over USB right now.
@@ -51,6 +68,8 @@ struct DeviceSnapshot: Equatable {
     var processes: [ProcessLoad] = []
 
     var memPercent: Double { memTotalMB > 0 ? memUsedMB / memTotalMB * 100 : 0 }
+    /// The hotter of CPU and GPU: what decides whether the chip slows itself down.
+    var chipTemp: Double? { [cpuTemp, gpuTemp].compactMap { $0 }.max() }
 }
 
 struct DeviceSample: Identifiable, Hashable {
@@ -63,6 +82,7 @@ struct DeviceSample: Identifiable, Hashable {
     let cpuTemp: Double?
     let gpuTemp: Double?
     let batteryTemp: Double?
+    let fanRPM: Double?
     let watts: Double?
     var id: Date { time }
 }
@@ -90,6 +110,7 @@ final class DeviceMonitor: ObservableObject {
     private var layer: String?
     private var layerOwner: String?
     private var processes: [ProcessLoad] = []
+    private var fanMode: String?
     private var refreshRate: Double = 60
     private var tick = 0
 
@@ -177,6 +198,7 @@ final class DeviceMonitor: ObservableObject {
         echo @@gpu; cat /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage /sys/class/kgsl/kgsl-3d0/gpuclk 2>/dev/null
         echo @@mem; grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo
         echo @@therm; grep -s . /sys/class/thermal/thermal_zone*/temp
+        echo @@fan; grep -s . /sys/class/gpio5_pwm2/speed /sys/class/gpio5_pwm2/duty /sys/class/gpio5_pwm2/period /sys/class/gpio5_pwm2/state
         echo @@batt; grep -s . /sys/class/power_supply/battery/capacity /sys/class/power_supply/battery/status /sys/class/power_supply/battery/current_now /sys/class/power_supply/battery/voltage_now /sys/class/power_supply/battery/temp /sys/class/power_supply/usb/current_now /sys/class/power_supply/usb/voltage_now
         echo @@fps; \(latency)
         """
@@ -186,7 +208,11 @@ final class DeviceMonitor: ObservableObject {
 
     /// Every few seconds: the busiest processes and which surface to measure frames on.
     private func slowPoll(serial: String) async {
-        let top = (try? await ADB.shared.shell("top -b -n 1 -m 6 -s 2 -o PID,%CPU,RES,NAME", serial: serial, timeout: 5)) ?? ""
+        let out = (try? await ADB.shared.shell("echo @@top; top -b -n 1 -m 6 -s 2 -o PID,%CPU,RES,NAME; echo @@fanmode; settings get system fan_mode 2>/dev/null",
+                                               serial: serial, timeout: 5)) ?? ""
+        let s = Self.sections(out)
+        let top = s["top"] ?? ""
+        fanMode = Int((s["fanmode"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)).map(Self.fanModeName)
         let cores = Double(max(1, snapshot?.clusters.reduce(0) { $0 + $1.cores } ?? 8))
         processes = Self.parseTop(top).map { ProcessLoad(pid: $0.pid, name: names?($0.name) ?? $0.name, cpu: $0.cpu / cores, memoryMB: $0.memoryMB) }
             .filter { $0.name != "top" }
@@ -266,12 +292,23 @@ final class DeviceMonitor: ObservableObject {
             let watts = abs(current) / 1_000_000 * voltage / 1_000_000
             snap.watts = watts > 0.05 ? watts : nil
         }
-        if let temp = snap.batteryTemp { snap.thermals.append(ThermalGroup(name: "Battery", celsius: temp)) }
+        if let temp = snap.batteryTemp { snap.thermals.append(ThermalGroup(name: "Battery", celsius: temp, kind: .battery, hint: "Keeps best above 15° and below 45°")) }
+
+        var fan: [String: String] = [:]
+        for (path, value) in Self.pathValues(s["fan"] ?? "") { fan[(path as NSString).lastPathComponent] = value }
+        if let rpm = fan["speed"].flatMap(Int.init) {
+            let on = fan["state"] != "0"
+            let duty = fan["duty"].flatMap(Double.init) ?? 0, period = fan["period"].flatMap(Double.init) ?? 0
+            snap.fan = FanReading(rpm: on ? rpm : 0, power: on && period > 0 ? min(1, duty / period) : 0, mode: fanMode)
+        } else {
+            snap.fan = nil
+        }
 
         updateFrames(&snap, latency: s["fps"] ?? "")
         snapshot = snap
         history.append(DeviceSample(time: Date(), fps: snap.fps, frameTimeMs: snap.frameTimeMs, cpu: snap.cpu, gpu: snap.gpu, mem: snap.memPercent,
-                                    cpuTemp: snap.cpuTemp, gpuTemp: snap.gpuTemp, batteryTemp: snap.batteryTemp, watts: snap.watts))
+                                    cpuTemp: snap.cpuTemp, gpuTemp: snap.gpuTemp, batteryTemp: snap.batteryTemp,
+                                    fanRPM: snap.fan.map { Double($0.rpm) }, watts: snap.watts))
         if history.count > Self.historyLength { history.removeFirst(history.count - Self.historyLength) }
     }
 
@@ -280,14 +317,14 @@ final class DeviceMonitor: ObservableObject {
     private func updateFrames(_ snap: inout DeviceSnapshot, latency: String) {
         let presents = Self.presents(latency)
         guard layer != nil, let newest = presents.last else {
-            snap.fps = nil; snap.frameTimeMs = nil; snap.worstFrameMs = nil; snap.jank = 0
+            snap.fps = nil; snap.frameTimeMs = nil; snap.worstFrameMs = nil; snap.jank = 0; snap.steady = false
             return
         }
         let stalled = lastPresent.map { newest <= $0 } ?? false
         lastPresent = newest
         let window = presents.filter { $0 >= newest - 1_000_000_000 }
         guard !stalled, window.count >= 2 else {
-            snap.fps = 0; snap.frameTimeMs = nil; snap.worstFrameMs = nil; snap.jank = 0
+            snap.fps = 0; snap.frameTimeMs = nil; snap.worstFrameMs = nil; snap.jank = 0; snap.steady = false
             return
         }
         let deltas = zip(window.dropFirst(), window).map { Double($0 - $1) / 1_000_000 }
@@ -297,6 +334,7 @@ final class DeviceMonitor: ObservableObject {
         snap.worstFrameMs = deltas.max()
         let budget = 1000 / max(1, refreshRate)
         snap.jank = deltas.filter { $0 > budget * 1.5 && $0 > (snap.frameTimeMs ?? 0) * 1.5 }.count
+        snap.steady = snap.jank == 0 && (snap.worstFrameMs ?? 0) <= (snap.frameTimeMs ?? 0) * 1.5
     }
 
     // MARK: - Parsing
@@ -363,12 +401,24 @@ final class DeviceMonitor: ObservableObject {
         path.split(separator: "/").first { $0.hasPrefix("cpu") && $0.count > 3 && Int($0.dropFirst(3)) != nil }.flatMap { Int($0.dropFirst(3)) }
     }
 
-    /// Sensors grouped into parts people recognise; each shows its hottest sensor.
+    /// AYN's names for `settings get system fan_mode`.
+    static func fanModeName(_ mode: Int) -> String {
+        let names = ["Off", "Quiet", "Sport", "High speed", "Smart"]
+        return names.indices.contains(mode) ? names[mode] : "Custom"
+    }
+
+    /// Sensors grouped into parts that matter on a handheld; each shows its hottest sensor.
+    /// The chip also has camera, modem and AI-engine sensors, but the Thor doesn't use those blocks,
+    /// so they only echo the chip's own temperature.
     static func thermals(_ text: String) -> [ThermalGroup] {
-        let groups: [(name: String, prefixes: [String])] = [
-            ("CPU", ["cpu-", "cpuss-"]), ("GPU", ["gpuss-"]), ("NPU", ["nspss-"]), ("Memory", ["ddr"]),
-            ("Video", ["video"]), ("Camera", ["camera-"]), ("Modem", ["mdmss-", "mmw", "pa"]),
-            ("Board", ["xo-therm"]), ("USB", ["usb-therm"]), ("Charger", ["pm8550b_tz"]),
+        let groups: [(name: String, prefixes: [String], kind: ThermalGroup.Kind, hint: String)] = [
+            ("CPU", ["cpu-", "cpuss-"], .chip, "Runs the game and emulator"),
+            ("GPU", ["gpuss-"], .chip, "Draws the graphics"),
+            ("Memory", ["ddr"], .chip, "RAM, stacked on the chip"),
+            ("Video encoder", ["video"], .chip, "Streams the screen to this Mac"),
+            ("Mainboard", ["xo-therm"], .body, "Inside the case, near the chip"),
+            ("USB-C port", ["usb-therm"], .body, "Warms up while charging"),
+            ("Charging chip", ["pm8550b_tz"], .body, "Manages battery charging"),
         ]
         var hottest: [String: Double] = [:]
         for line in text.split(separator: "\n") {
@@ -382,7 +432,7 @@ final class DeviceMonitor: ObservableObject {
                 hottest[group.name] = max(hottest[group.name] ?? -100, celsius)
             }
         }
-        return groups.compactMap { g in hottest[g.name].map { ThermalGroup(name: g.name, celsius: $0) } }
+        return groups.compactMap { g in hottest[g.name].map { ThermalGroup(name: g.name, celsius: $0, kind: g.kind, hint: g.hint) } }
     }
 
     static func parseTop(_ text: String) -> [ProcessLoad] {

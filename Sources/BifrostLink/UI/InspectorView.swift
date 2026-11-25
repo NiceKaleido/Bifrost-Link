@@ -38,7 +38,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .library: return "Import games, check your collection and make room."
         case .ports: return "Android versions of classic games, rated by \(DeviceInfo.name) owners."
         case .playtime: return "How long you play, on the \(DeviceInfo.name) and while docked."
-        case .performance: return "Live frame rate, load, memory and temperatures from your \(DeviceInfo.name)."
+        case .performance: return "How well games run on your \(DeviceInfo.name), how hot it gets and how hard the fan works."
         case .saves: return "Copies of your emulator saves and settings on this Mac."
         case .cleanup: return "Free up space that emulators leave behind."
         }
