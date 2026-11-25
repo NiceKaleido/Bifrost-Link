@@ -12,6 +12,8 @@ struct LeftoverItem: Identifiable, Hashable {
     var game: String
     let path: String
     var bytes: Int64 = 0
+    /// The emulator made its folder read-only for other apps: this can't be deleted, only emptied to 0 bytes.
+    var locked = false
     var id: String { path }
 }
 
@@ -21,6 +23,7 @@ struct LeftoverGame: Identifiable, Hashable {
     let items: [LeftoverItem]
     var id: String { emulator + "|" + (items.first?.gameKey ?? game) }
     var bytes: Int64 { items.reduce(0) { $0 + $1.bytes } }
+    var hasLocked: Bool { items.contains(where: \.locked) }
     var kinds: String {
         LeftoverItem.Kind.allCases.filter { kind in items.contains { $0.kind == kind } }.map(\.rawValue).joined(separator: ", ")
     }
@@ -63,13 +66,47 @@ enum LeftoverScanner {
         }
 
         let sizes = await sizes(result.items.map(\.path), serial: serial)
+        let (locked, emptied) = await lockedPaths(result.items.map(\.path), serial: serial)
         result.items = result.items.compactMap { item in
-            guard let bytes = sizes[item.path] else { return nil }
+            // Already emptied by an earlier cleanup: nothing left to free.
+            guard let bytes = sizes[item.path], !emptied.contains(item.path) else { return nil }
             var item = item
             item.bytes = bytes
+            item.locked = locked.contains(item.path)
             return item
         }
         return result
+    }
+
+    /// Paths adb can't delete because their folder (or, for a folder, any folder inside it) isn't writable for it.
+    /// Emulators sometimes create folders as drwxr-s---: adb, and the Files app, can then read and overwrite the
+    /// files but not remove them. `emptied` are the locked ones whose files are all 0 bytes already.
+    static func lockedPaths(_ paths: [String], serial: String) async -> (locked: Set<String>, emptied: Set<String>) {
+        var locked = Set<String>(), emptied = Set<String>()
+        for chunk in stride(from: 0, to: paths.count, by: 60).map({ Array(paths[$0..<min($0 + 60, paths.count)]) }) {
+            let command = chunk.map { path in
+                let q = ADB.quote(path)
+                let deletable = "{ [ -w \"$(dirname \(q))\" ] && { [ ! -d \(q) ] || [ -z \"$(find \(q) -type d 2>/dev/null | while read -r d; do [ -w \"$d\" ] || echo n; done)\" ]; }; }"
+                return "if \(deletable); then :; elif [ -n \"$(find \(q) -type f -size +0 2>/dev/null | head -1)\" ]; then echo L\(q); else echo E\(q); fi"
+            }.joined(separator: "; ") + "; true"
+            let out = (try? await ADB.shared.shell(command, serial: serial, timeout: 60)) ?? ""
+            for line in out.split(separator: "\n") {
+                if line.hasPrefix("L") { locked.insert(String(line.dropFirst())) }
+                if line.hasPrefix("E") { emptied.insert(String(line.dropFirst())) }
+            }
+        }
+        return (locked, emptied)
+    }
+
+    /// Which of these paths still exist.
+    static func existing(_ paths: [String], serial: String) async -> Set<String> {
+        var found = Set<String>()
+        for chunk in stride(from: 0, to: paths.count, by: 80).map({ Array(paths[$0..<min($0 + 80, paths.count)]) }) {
+            let command = chunk.map { "[ -e \(ADB.quote($0)) ] && echo \(ADB.quote($0))" }.joined(separator: "; ") + "; true"
+            let out = (try? await ADB.shared.shell(command, serial: serial, timeout: 30)) ?? ""
+            found.formUnion(out.split(separator: "\n").map(String.init))
+        }
+        return found
     }
 
     // MARK: - The library

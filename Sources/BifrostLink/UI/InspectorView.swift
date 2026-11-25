@@ -384,11 +384,11 @@ struct LibraryView: View {
                 } else {
                     updatesSection
                     unsortedSection
-                    spaceSection
-                    biosSection
                     healthSection
                     leftoverSection
                     shrinkSection
+                    biosSection
+                    spaceSection
                 }
             }
             .padding(12)
@@ -583,18 +583,46 @@ struct LibraryView: View {
     @ViewBuilder
     private var biosSection: some View {
         if !hub.bios.isEmpty {
-            let missing = hub.bios.filter { $0.found == nil && $0.required }.count
-            SectionHeader(title: "BIOS", symbol: "cpu", trailing: missing == 0 ? "all set" : "\(missing) missing")
+            let missing = hub.bios.reduce(0) { $0 + $1.missingRequired }
+            SectionHeader(title: "BIOS & keys", symbol: "cpu", trailing: missing == 0 ? "ready to play" : "\(missing) missing")
             Card {
-                ForEach(hub.bios) { status in
-                    HStack(spacing: 8) {
-                        Image(systemName: status.found != nil ? "checkmark.circle.fill" : (status.required ? "xmark.circle.fill" : "minus.circle"))
-                            .foregroundStyle(status.found != nil ? .green : (status.required ? .orange : .secondary))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("\(Systems.name(for: status.system)) · \(status.label)").font(.callout)
-                            Text(status.found ?? (status.required ? "Not found in the bios folder" : "Optional")).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                ForEach(hub.bios) { report in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(report.emulator).font(.callout.weight(.semibold))
+                            if !report.system.isEmpty { Text(report.system).font(.caption).foregroundStyle(.secondary) }
+                            Spacer()
+                        }
+                        if let folder = report.folder {
+                            Button { files.open(folder) } label: {
+                                Label(folder.replacingOccurrences(of: "/sdcard/Android/data/", with: "…/"), systemImage: "folder").font(.caption2)
+                            }
+                            .buttonStyle(.link)
+                            .lineLimit(1).truncationMode(.middle)
+                            .help("Open \(folder) in Files")
+                        }
+                        ForEach(report.lines) { line in
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: line.state == .ok ? "checkmark.circle.fill" : line.state == .missing ? "xmark.circle.fill" : "minus.circle")
+                                    .foregroundStyle(line.state == .ok ? AnyShapeStyle(.green) : line.state == .missing ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(line.label).font(.callout)
+                                    Text(line.detail).font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer()
+                                if let copy = line.copy {
+                                    Button("Copy") { Task { await hub.copyBios(copy) } }
+                                        .controlSize(.small)
+                                        .help("Copy \((copy.from as NSString).lastPathComponent) from your bios folder to \(report.emulator)")
+                                }
+                            }
+                        }
+                        if let note = report.note {
+                            Text(note).font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                         }
                     }
+                    .padding(.vertical, 3)
+                    if report.id != hub.bios.last?.id { Divider().opacity(0.5) }
                 }
             }
         }
@@ -643,7 +671,8 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var leftoverSection: some View {
-        let selected = hub.leftovers.filter { hub.leftoverSelection.contains($0.id) }
+        let cleanable = hub.leftovers
+        let selected = cleanable.filter { hub.leftoverSelection.contains($0.id) }
         let selectedBytes = selected.reduce(0) { $0 + $1.bytes }
         let total = hub.leftovers.reduce(0) { $0 + $1.bytes }
         SectionHeader(title: "Leftover saves & caches", symbol: "externaldrive.badge.xmark", trailing: hub.leftovers.isEmpty ? "all tidy" : total.bytesText)
@@ -652,19 +681,19 @@ struct LibraryView: View {
                 Label("Every save, save state and shader cache still belongs to a game on your \(DeviceInfo.name).", systemImage: "hand.thumbsup")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                Text("\(hub.leftovers.count) game\(hub.leftovers.count == 1 ? " is" : "s are") gone, but \(hub.leftovers.count == 1 ? "its" : "their") saves or shader caches are still on the \(DeviceInfo.name).")
+                Text("\(hub.leftovers.count) game\(hub.leftovers.count == 1 ? " is" : "s are") no longer here, but \(hub.leftovers.count == 1 ? "its" : "their") saves or shader caches are still on the \(DeviceInfo.name).")
                     .font(.callout)
-                let emulators = Array(Set(hub.leftovers.map(\.emulator))).sorted()
+                let emulators = Array(Set(cleanable.map(\.emulator))).sorted()
                 ForEach(emulators, id: \.self) { emulator in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(emulator).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        ForEach(hub.leftovers.filter { $0.emulator == emulator }) { game in
+                        ForEach(cleanable.filter { $0.emulator == emulator }) { game in
                             Toggle(isOn: Binding(get: { hub.leftoverSelection.contains(game.id) },
                                                  set: { if $0 { hub.leftoverSelection.insert(game.id) } else { hub.leftoverSelection.remove(game.id) } })) {
                                 HStack(spacing: 6) {
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(game.game).font(.callout).lineLimit(1).truncationMode(.middle)
-                                        Text(game.kinds).font(.caption2).foregroundStyle(.tertiary)
+                                        Text(game.kinds + (game.hasLocked ? " · read-only, gets emptied" : "")).font(.caption2).foregroundStyle(.tertiary)
                                     }
                                     Spacer()
                                     Text(game.bytes.bytesText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -675,17 +704,23 @@ struct LibraryView: View {
                     }
                     .padding(.top, 2)
                 }
-                HStack {
-                    Button(selected.count == hub.leftovers.count ? "Select None" : "Select All") {
-                        hub.leftoverSelection = selected.count == hub.leftovers.count ? [] : Set(hub.leftovers.map(\.id))
-                    }
-                    .controlSize(.small)
-                    Spacer()
-                    Button(hub.cleaningLeftovers ?? "Clean Up \(selectedBytes.bytesText)") { confirmLeftovers = true }
+                if !cleanable.isEmpty {
+                    HStack {
+                        Button(selected.count == cleanable.count ? "Select None" : "Select All") {
+                            hub.leftoverSelection = selected.count == cleanable.count ? [] : Set(cleanable.map(\.id))
+                        }
                         .controlSize(.small)
-                        .disabled(selected.isEmpty || hub.cleaningLeftovers != nil)
+                        Spacer()
+                        Button(hub.cleaningLeftovers ?? "Clean Up \(selectedBytes.bytesText)") { confirmLeftovers = true }
+                            .controlSize(.small)
+                            .disabled(selected.isEmpty || hub.cleaningLeftovers != nil)
+                    }
+                    Text("Saves and save states are backed up to this Mac first. Shader caches are just removed.").font(.caption2).foregroundStyle(.tertiary)
+                    if cleanable.contains(where: \.hasLocked) {
+                        Text("Read-only: the emulator made these folders impossible to delete from outside, even in Files on the \(DeviceInfo.name). Their files are emptied to 0 bytes instead, which frees the same space.")
+                            .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Text("Saves and save states are backed up to this Mac first. Shader caches are just removed.").font(.caption2).foregroundStyle(.tertiary)
             }
             ForEach(hub.leftoverNotes, id: \.self) { note in
                 Label(note, systemImage: "info.circle").font(.caption2).foregroundStyle(.tertiary)

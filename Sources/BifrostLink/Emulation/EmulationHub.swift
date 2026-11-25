@@ -45,14 +45,6 @@ struct OrphanEntry: Identifiable, Hashable {
     var id: String { gamelist + "|" + file }
 }
 
-struct BiosStatus: Identifiable {
-    let system: String
-    let label: String
-    let found: String?
-    let required: Bool
-    var id: String { system + label }
-}
-
 @MainActor
 final class EmulationHub: ObservableObject {
     @Published private(set) var folders: [String: RomFolder] = [:]
@@ -69,7 +61,7 @@ final class EmulationHub: ObservableObject {
     @Published private(set) var leftoverNotes: [String] = []
     @Published var leftoverSelection: Set<String> = []
     @Published private(set) var cleaningLeftovers: String?
-    @Published private(set) var bios: [BiosStatus] = []
+    @Published private(set) var bios: [BiosReport] = []
     @Published var shrinkCandidates: [ShrinkCandidate] = []
     @Published private(set) var scanning = false
     @Published private(set) var lastScan: Date?
@@ -329,18 +321,24 @@ final class EmulationHub: ObservableObject {
     }
 
     private func scanBios(serial: String) async {
-        let dirs = (files?.volumes.map { $0.path + "/bios" } ?? []) + ["/sdcard/bios", "/sdcard/RetroArch/system"]
-        let command = dirs.map { "ls -1 \(ADB.quote($0)) 2>/dev/null" }.joined(separator: "; ")
-        let names = ((try? await ADB.shared.shell(command, serial: serial, timeout: 15)) ?? "").split(separator: "\n").map { $0.lowercased() }
-        var result: [BiosStatus] = []
-        for systemId in folders.keys.sorted() {
-            guard let system = Systems.system(systemId) else { continue }
-            for requirement in system.bios {
-                let match = names.first { name in requirement.patterns.contains { name.contains($0) } }
-                result.append(BiosStatus(system: systemId, label: requirement.label, found: match, required: requirement.required))
-            }
+        bios = await BiosCheck.scan(serial: serial)
+    }
+
+    /// Copies a BIOS file from the shared bios folder into an emulator's own folder and checks the copy.
+    func copyBios(_ copy: BiosReport.Copy) async {
+        guard let serial else { return }
+        let from = ADB.quote(copy.from), target = copy.to.hasSuffix("/") ? copy.to + (copy.from as NSString).lastPathComponent : copy.to
+        let to = ADB.quote(target)
+        let out = (try? await ADB.shared.shell("mkdir -p \(ADB.quote((target as NSString).deletingLastPathComponent)) && cp \(from) \(to) && [ \"$(md5sum < \(from) | cut -d' ' -f1)\" = \"$(md5sum < \(to) | cut -d' ' -f1)\" ] && echo ok", serial: serial, timeout: 60)) ?? ""
+        let name = (copy.from as NSString).lastPathComponent
+        if out.contains("ok") {
+            Log.write("bios: copied \(copy.from) -> \(target)")
+            toast?("checkmark.circle", "Copied \(name)")
+        } else {
+            Log.write("bios: copy failed \(copy.from) -> \(target)")
+            toast?("exclamationmark.triangle", "Couldn’t copy \(name)")
         }
-        bios = result
+        await scanBios(serial: serial)
     }
 
     private func scanHealth(serial: String) async {
@@ -406,6 +404,7 @@ final class EmulationHub: ObservableObject {
     }
 
     /// Backs up the saves and save states on the Mac, then removes everything selected.
+    /// Files in folders an emulator made read-only can't be deleted, so they're emptied to 0 bytes instead.
     func cleanLeftovers() async {
         guard let serial else { return }
         let games = leftovers.filter { leftoverSelection.contains($0.id) }
@@ -424,13 +423,30 @@ final class EmulationHub: ObservableObject {
         for package in Set(items.compactMap(\.package)) {
             _ = try? await ADB.shared.shell("am force-stop \(package)", serial: serial, timeout: 10)
         }
-        for chunk in stride(from: 0, to: items.count, by: 40) {
-            let paths = items[chunk..<min(chunk + 40, items.count)].map { ADB.quote($0.path) }.joined(separator: " ")
+        let deletable = items.filter { !$0.locked }, locked = items.filter(\.locked)
+        for chunk in stride(from: 0, to: deletable.count, by: 40) {
+            let paths = deletable[chunk..<min(chunk + 40, deletable.count)].map { ADB.quote($0.path) }.joined(separator: " ")
             _ = try? await ADB.shared.shell("rm -rf \(paths)", serial: serial, timeout: 120)
         }
-        for item in items { Log.write("leftovers: removed \(item.kind.rawValue) \(item.path)") }
-        let freed = items.reduce(0) { $0 + $1.bytes }
-        toast?("sparkles", "Freed \(freed.bytesText) from \(games.count) game\(games.count == 1 ? "" : "s") that are gone\(keep.isEmpty ? "" : ". Saves are backed up on this Mac")")
+        if !locked.isEmpty {
+            let command = locked.map { "find \(ADB.quote($0.path)) -type f 2>/dev/null | while read -r f; do : > \"$f\"; done" }.joined(separator: "; ")
+            _ = try? await ADB.shared.shell(command, serial: serial, timeout: 120)
+        }
+        // Check what really happened, rather than trusting rm.
+        let remaining = await LeftoverScanner.existing(deletable.map(\.path), serial: serial)
+        let stillFull = await LeftoverScanner.lockedPaths(locked.map(\.path), serial: serial).locked
+        let failed = items.filter { remaining.contains($0.path) || stillFull.contains($0.path) }
+        for item in items {
+            let verb = failed.contains(item) ? "could not clean" : item.locked ? "emptied" : "removed"
+            Log.write("leftovers: \(verb) \(item.kind.rawValue) \(item.path)")
+        }
+        let freed = items.filter { !failed.contains($0) }.reduce(0) { $0 + $1.bytes }
+        if failed.count == items.count {
+            toast?("exclamationmark.triangle", "Nothing could be cleaned up")
+        } else {
+            let note = failed.isEmpty ? "" : ". \(failed.count) file\(failed.count == 1 ? "" : "s") couldn’t be cleaned"
+            toast?("sparkles", "Freed \(freed.bytesText)\(keep.isEmpty ? "" : ", saves are backed up on this Mac")\(note)")
+        }
         await scanLeftovers(serial: serial)
     }
 
