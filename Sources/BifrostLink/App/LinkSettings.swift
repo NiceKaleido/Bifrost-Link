@@ -100,6 +100,8 @@ final class LinkSettings: ObservableObject {
     @Published var saveBackupKeep: Int { didSet { defaults.set(saveBackupKeep, forKey: "saveBackupKeep") } }
     @Published var customSaveFolders: [CustomSaveFolder] { didSet { defaults.set(try? JSONEncoder().encode(customSaveFolders), forKey: "customSaveFolders") } }
     @Published var excludedSaveSources: [String] { didSet { defaults.set(excludedSaveSources, forKey: "excludedSaveSources") } }
+    /// Pokémon saves hidden from the Pokémon tab: device path → name shown in Settings.
+    @Published var hiddenPokemonSaves: [String: String] { didSet { defaults.set(hiddenPokemonSaves, forKey: "hiddenPokemonSaves") } }
 
     func addCustomSaveFolder(_ path: String, name: String? = nil) {
         let clean = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
@@ -191,6 +193,7 @@ final class LinkSettings: ObservableObject {
         saveBackupKeep = value("saveBackupKeep", 10)
         customSaveFolders = d.data(forKey: "customSaveFolders").flatMap { try? JSONDecoder().decode([CustomSaveFolder].self, from: $0) } ?? []
         excludedSaveSources = value("excludedSaveSources", [String]())
+        hiddenPokemonSaves = value("hiddenPokemonSaves", [String: String]())
         fullscreenControls = value("fullscreenControls", true)
         quietFullscreen = value("quietFullscreen", true)
         macKeyboardTyping = value("macKeyboardTyping", true)

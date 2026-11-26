@@ -36,7 +36,7 @@ BIN="$(swift build -c release --show-bin-path)/BifrostLink"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Bifrost Link"
-cp Resources/bifrost-server.jar Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp Resources/bifrost-server.jar Resources/AppIcon.icns Resources/pokedata.json.deflate "$APP/Contents/Resources/"
 
 ADB_BIN="$(command -v adb || true)"
 [[ -z "$ADB_BIN" && -x /opt/homebrew/share/android-commandlinetools/platform-tools/adb ]] && ADB_BIN=/opt/homebrew/share/android-commandlinetools/platform-tools/adb

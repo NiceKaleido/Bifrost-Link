@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, apps, library, ports, playtime, performance, saves, cleanup
+    case files, apps, library, ports, playtime, performance, achievements, pokemon, saves, cleanup
 
     var id: String { rawValue }
 
@@ -13,6 +13,8 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .ports: return "Ports"
         case .playtime: return "Play Time"
         case .performance: return "Performance"
+        case .achievements: return "Achievements"
+        case .pokemon: return "Pokémon"
         case .saves: return "Saves"
         case .cleanup: return "Cleanup"
         }
@@ -26,6 +28,8 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .ports: return "Native Ports"
         case .playtime: return "Play Time"
         case .performance: return "Performance"
+        case .achievements: return "RetroAchievements"
+        case .pokemon: return "Pokémon"
         case .saves: return "Save Backups"
         case .cleanup: return "Cleanup"
         }
@@ -39,6 +43,8 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .ports: return "Android versions of classic games, rated by \(DeviceInfo.name) owners."
         case .playtime: return "How long you play, on the \(DeviceInfo.name) and while docked."
         case .performance: return "How well games run on your \(DeviceInfo.name), how hot it gets and how hard the fan works."
+        case .achievements: return "Your RetroAchievements progress: games, achievements and recent unlocks."
+        case .pokemon: return "Your Pokémon across every game on the \(DeviceInfo.name): edit moves, evolve trade evolutions, move them between games."
         case .saves: return "Copies of your emulator saves and settings on this Mac."
         case .cleanup: return "Free up space that emulators leave behind."
         }
@@ -52,12 +58,14 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         case .ports: return "shippingbox.fill"
         case .playtime: return "timer"
         case .performance: return "gauge.with.dots.needle.67percent"
+        case .achievements: return "trophy.fill"
+        case .pokemon: return "circle.circle.fill"
         case .saves: return "clock.arrow.circlepath"
         case .cleanup: return "sparkles"
         }
     }
 
-    static let groups: [[InspectorTab]] = [[.files, .apps], [.library, .ports, .playtime, .performance], [.saves, .cleanup]]
+    static let groups: [[InspectorTab]] = [[.files, .apps], [.library, .ports], [.achievements, .playtime, .performance], [.pokemon, .saves, .cleanup]]
 }
 
 struct InspectorView: View {
@@ -80,6 +88,8 @@ struct InspectorView: View {
                     case .ports: PortsPanel(catalog: manager.ports, manager: manager, settings: settings)
                     case .playtime: PlayTimeView(stats: manager.stats, cocoon: manager.cocoon)
                     case .performance: PerformanceView(monitor: manager.monitor, manager: manager)
+                    case .achievements: AchievementsView(hub: manager.achievements)
+                    case .pokemon: PokemonView(hub: manager.pokemon)
                     case .saves: SavesView(backups: manager.backups, settings: settings)
                     case .cleanup: CleanupView(cleanup: manager.cleanup)
                     }
@@ -99,6 +109,8 @@ struct InspectorView: View {
         case .ports: PortsHeaderActions(catalog: manager.ports)
         case .playtime: PlayTimeHeaderActions(stats: manager.stats)
         case .performance: PerformanceHeaderActions(settings: settings)
+        case .achievements: AchievementsHeaderActions(hub: manager.achievements)
+        case .pokemon: PokemonHeaderActions(hub: manager.pokemon)
         case .saves: SavesHeaderActions(backups: manager.backups)
         case .cleanup: CleanupHeaderActions(cleanup: manager.cleanup)
         }

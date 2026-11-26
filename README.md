@@ -207,9 +207,55 @@ Everything about your games. It checks itself a few seconds after you link.
   - Each game is copied to the Mac, shrunk and checked there, then sent back. Your originals are only removed once you confirm, and playlists and Cocoon entries are updated to the new file.
 - **App updates:** sideloaded emulators and apps are checked against their GitHub releases. Native ports from the Recompa catalog are left out here; they get their updates in the **Ports** section.
 
+### Achievements
+Your [RetroAchievements](https://retroachievements.org) progress.
+
+**Signing in:** use your RetroAchievements username and your *web API key* (retroachievements.org ▸ Settings ▸ Keys). Both are kept on this Mac only, in a file only your account can read.
+
+What the tab shows:
+- **Profile:** points and what you're playing right now.
+- **Your games:** progress bar and count per game, with beaten/mastered tags and an "on Thor" tag for games whose ROM is in your Roms folders. Filters: all, in progress, mastered, on my Thor.
+- **Game details:** click a game for all its achievements, with badges and unlock dates (normal or hardcore).
+- **Recent unlocks:** from the last 30 days.
+
+### Pokémon
+Your Pokémon from every mainline game, Red/Green through Legends: Z-A, in one place.
+
+Where saves are found:
+- PokeDaisy, RetroArch and melonDS (Game Boy, GBA, DS)
+- Azahar (3DS)
+- Dolphin (Colosseum, XD)
+- Peanuts Native (Let's Go, Sword/Shield, BD/SP, Legends: Arceus, Scarlet/Violet, Z-A)
+- other native ports that keep a regular save file
+
+Games you haven't installed yet are picked up as soon as they have a save.
+
+What you can do:
+- **Look through your party and boxes.**
+  - **Icons** come from [Pokémon Showdown](https://pokemonshowdown.com)'s icon sheet. It covers all 1,025 species plus regional forms and Megas. It's downloaded once and cached on your Mac.
+  - **Offline:** if the download isn't possible, icons are read from the Pokémon GBA/DS ROMs in your Roms folders instead.
+  - **Game art:** each game shows its Cocoon box art (for Peanuts Native, the Cocoon shortcut icon), or PokeDaisy's cover.
+- **Edit moves.** The list shows the moves the Pokémon learns by level up to its current level in that game. Switch on **Show TMs, tutors and egg moves** for everything else it could know. **Use the moves it would know at level …** fills in the four newest level-up moves.
+- **Trade evolutions** (Kadabra, Haunter, Onix holding a Metal Coat, Karrablast and Shelmet, …) evolve without a second player. When an item is needed, it's given and used up.
+- **Move Pokémon to another game.** A preview lists everything that changes:
+  - moves, items or Poké Balls the other game doesn't have
+  - the hidden ability
+  - Game Boy DVs and IVs
+  - nickname length
+
+  Pokémon that don't exist in the other game (Incineroar in Emerald, a Pikachu in a cap in FireRed, Bulbasaur in Legends: Arceus) can't be moved, and you're told why. Moves the real games can't make (newer → older, for example) are marked **Not possible in the real games**, and the Pokémon is rebuilt for the older game.
+
+Every change is saved like this:
+1. If the game is open, it's closed first (you're asked).
+2. Both saves are backed up on this Mac ("Before Pokémon change" / "Before Pokémon move" in the Saves tab).
+3. The new file is checked, then swapped in.
+
+Romhack saves (Unbound and friends) and Japanese Gen 1–3 saves can be looked at but not changed. Peanuts Native saves are view-only until writing to them has been tested.
+
 ### Saves
 Backups of your emulator saves on your Mac. They cover:
 - RetroArch, PPSSPP, Dolphin, DuckStation, Eden, Azahar, melonDS and ARMSX2
+- PokeDaisy and Peanuts Native (only the game saves, not Peanuts' keys and firmware)
 - each emulator's settings (as a separate item)
 - any folder you add yourself
 
@@ -366,7 +412,28 @@ What you need to build:
 - To bundle the optional tools: `brew install rom-tools xdelta`, which provides `chdman` and `xdelta3`
 - To rebuild the device server: JDK 17
 
-The build bundles `adb`, `aapt2`, `chdman`, `xdelta3` and the device server into the app.
+The build bundles `adb`, `aapt2`, `chdman`, `xdelta3`, the device server and the Pokémon data file into the app.
+
+### Tests
+
+```sh
+./scripts/test.sh
+```
+
+This works with just the Command Line Tools. The save-format tests use your own saves when you put copies in `tmp/pokemon-fixtures/` (git ignores that folder), for example `blue.sav`, `black.sav`, `3ds-<title id>.main`. Without them, the tests fall back to save files they build themselves.
+
+### Pokémon data
+
+`Resources/pokedata.json.deflate` holds names, base stats, learnsets, evolutions, regional dexes and the per-game index tables. It contains no artwork. To rebuild it:
+
+```sh
+python3 scripts/gen-pokedata.py <pokeapi>/data/v2/csv [<PKHeX>/PKHeX.Core/Resources/byte/personal]
+```
+
+- The first folder is the [PokeAPI](https://github.com/PokeAPI/pokeapi) CSV dump.
+- The optional second folder is PKHeX's personal tables. They provide the "present in game" flags, which say exactly which species and forms each Switch game accepts.
+
+The save formats under `Sources/BifrostLink/Pokemon/Formats/` are written from scratch in Swift. PKHeX and the Project Pokémon / Bulbapedia docs were used as references for the layouts and constants.
 
 ### Releases
 

@@ -61,6 +61,8 @@ final class DeviceManager: ObservableObject {
     let apps = AppManager()
     let updater = EmulatorUpdater()
     let ports = PortCatalog()
+    let pokemon = PokemonHub()
+    let achievements = AchievementsHub()
     private var homeProfile: LayoutProfile?
     let audio = AudioOutput()
     private var router: AudioRouter?
@@ -97,6 +99,9 @@ final class DeviceManager: ObservableObject {
         emulation.toast = toastHandler
         ports.toast = toastHandler
         ports.backups = backups
+        pokemon.backups = backups
+        pokemon.toast = toastHandler
+        pokemon.cocoonRoot = { [weak self] in await self?.emulation.cocoonRoot }
         ports.romFolders = { [weak self] in self?.emulation.folders.mapValues(\.path) ?? [:] }
         stats.bridge = cocoon
         monitor.foreground = { [weak self] in
@@ -374,6 +379,8 @@ final class DeviceManager: ObservableObject {
         files.reset(serial: serial)
         emulation.reset(serial: serial)
         backups.reset(serial: serial)
+        pokemon.reset(serial: serial)
+        achievements.reset(serial: serial)
         cleanup.reset(serial: serial)
         updater.reset(serial: serial)
         ports.reset(serial: serial)
@@ -636,6 +643,8 @@ final class DeviceManager: ObservableObject {
         stats.serial = nil
         emulation.reset(serial: nil)
         backups.reset(serial: nil)
+        pokemon.reset(serial: nil)
+        achievements.reset(serial: nil)
         cleanup.reset(serial: nil)
         updater.reset(serial: nil)
         ports.reset(serial: nil)

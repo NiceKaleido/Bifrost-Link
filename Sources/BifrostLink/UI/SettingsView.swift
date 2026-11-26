@@ -195,6 +195,34 @@ struct SettingsView: View {
                 footer("Saves and states from your emulators are copied to the Mac. Once there are more backups than you keep, the oldest are replaced. Pinned backups are never replaced. Choose what gets backed up, and add your own folders, in the Saves tab.")
             }
             Section {
+                let user = Keychain.get("username")
+                LabeledContent("Account", value: user ?? "Not signed in")
+                if user != nil {
+                    Button("Sign Out") { DeviceManager.shared.achievements.signOut() }
+                }
+            } header: {
+                Text("RetroAchievements")
+            } footer: {
+                footer("Sign in from the Achievements tab with your username and web API key (retroachievements.org ▸ Settings ▸ Keys). Both are kept on this Mac only, in a file only your account can read. The tab only reads your progress.")
+            }
+            Section {
+                if settings.hiddenPokemonSaves.isEmpty {
+                    Text("No games are hidden.").foregroundStyle(.secondary)
+                } else {
+                    ForEach(settings.hiddenPokemonSaves.sorted(by: { $0.value < $1.value }), id: \.key) { path, name in
+                        HStack {
+                            Text(name).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button("Show Again") { settings.hiddenPokemonSaves[path] = nil }
+                        }
+                    }
+                }
+            } header: {
+                Text("Pokémon: hidden games")
+            } footer: {
+                footer("Games you hid in the Pokémon tab (right-click ▸ Hide from List). Their saves stay untouched on the \(DeviceInfo.name).")
+            }
+            Section {
                 Toggle("Check for port updates when the \(DeviceInfo.name) links", isOn: $settings.checkPortUpdates)
                 Toggle("Show ports rated for the \(DeviceInfo.name) first", isOn: $settings.thorRatedFirst)
             } header: {
