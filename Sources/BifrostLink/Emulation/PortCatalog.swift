@@ -255,7 +255,8 @@ final class PortCatalog: ObservableObject {
     var packages: Set<String> { Set(ports.flatMap { $0.forks.compactMap(\.package) }) }
 
     func refresh(force: Bool = false) async {
-        guard !loading, force || Date().timeIntervalSince(lastFetch) > 6 * 3600 || index == nil else { return }
+        // Some ports publish several releases a day, so the catalog is checked hourly.
+        guard !loading, force || Date().timeIntervalSince(lastFetch) > 3600 || index == nil else { return }
         loading = true
         defer { loading = false }
         let servers = index?.servers?.catalog?.filter { $0.hasPrefix("https://") } ?? Self.defaultServers
@@ -413,6 +414,25 @@ final class PortCatalog: ObservableObject {
     }
 
     func install(_ port: RecompaPort, fork: RecompaFork, release: RecompaRelease? = nil) {
+        // "Install"/"Update" means the newest release *now*: re-check the catalog first unless it's
+        // only a few minutes old, so an already-outdated version isn't installed.
+        guard release == nil, Date().timeIntervalSince(lastFetch) > 300 else {
+            enqueue(port, fork: fork, release: release)
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refresh(force: true)
+            let freshPort = self.ports.first { $0.id == port.id } ?? port
+            let freshFork = freshPort.forks.first { $0.repo == fork.repo } ?? fork
+            if let newer = freshFork.release?.tag, newer != fork.release?.tag {
+                Log.write("recompa: \(port.name) newest release is now \(newer) (catalog was \(fork.release?.tag ?? "?"))")
+            }
+            self.enqueue(freshPort, fork: freshFork, release: nil)
+        }
+    }
+
+    private func enqueue(_ port: RecompaPort, fork: RecompaFork, release: RecompaRelease?) {
         guard let package = fork.package, let chosen = release ?? fork.release, chosen.asset != nil else {
             toast?("exclamationmark.triangle", "\(port.name) has no installable release")
             return
@@ -423,7 +443,11 @@ final class PortCatalog: ObservableObject {
     }
 
     func updateAll() {
-        for item in updates { install(item.port, fork: item.fork) }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refresh(force: true)
+            for item in self.updates { self.enqueue(item.port, fork: item.fork, release: nil) }
+        }
     }
 
     func cancel(_ id: UUID) {
