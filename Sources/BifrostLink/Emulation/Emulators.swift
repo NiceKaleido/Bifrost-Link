@@ -51,6 +51,7 @@ struct EmulatorProfile: Identifiable, Hashable {
 
 enum Emulators {
     static let data = "/sdcard/Android/data"
+    static let peanuts = "dev.nxnative.android.peanuts"
 
     static let all: [EmulatorProfile] = [
         EmulatorProfile(id: "retroarch", name: "RetroArch", package: "com.retroarch", paths: [
@@ -98,6 +99,14 @@ enum Emulators {
         EmulatorProfile(id: "melonds", name: "melonDS", package: "me.magnum.melondualds", paths: [
             .saves: ["\(data)/me.magnum.melondualds/files/saves"],
         ], findSaves: "for d in /sdcard/Roms/nds $(ls -d /storage/*/Roms/nds 2>/dev/null | grep -v emulated); do find \"$d\" -maxdepth 1 -name '*.sav'; done 2>/dev/null"),
+        EmulatorProfile(id: "pokedaisy", name: "PokeDaisy", package: "com.pokedaisy.app", paths: [
+            .saves: ["\(data)/com.pokedaisy.app/files/saves"],
+            .states: ["\(data)/com.pokedaisy.app/files/states"],
+        ], configs: ["\(data)/com.pokedaisy.app/files/controls.properties", "\(data)/com.pokedaisy.app/files/hotkeys.properties"]),
+        // Peanuts Native keeps one folder per game (plus a `.work` twin it writes through) next to a
+        // host folder with the console keys and firmware. Only the game folders are backed up.
+        EmulatorProfile(id: "peanuts", name: "Peanuts Native", package: Emulators.peanuts, paths: [:],
+                        findSaves: "cd \(data)/\(Emulators.peanuts)/files/saves 2>/dev/null && for d in */; do d=${d%/}; [ -d \"$d/keys\" ] || [ -d \"$d/nand\" ] || echo \"$PWD/$d\"; done"),
         EmulatorProfile(id: "armsx2", name: "ARMSX2", package: "com.armsx2", paths: [
             .saves: ["\(data)/com.armsx2/files/memcards"],
             .states: ["\(data)/com.armsx2/files/sstates"],
