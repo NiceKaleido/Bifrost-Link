@@ -109,8 +109,20 @@ final class EmulationHub: ObservableObject {
     func refreshFolders() async {
         guard let serial else { return }
         folders = await RomLocator.folders(serial: serial)
-        let probe = (try? await ADB.shared.shell("for d in /storage/*/Cocoon_Data /sdcard/Cocoon_Data; do [ -d \"$d\" ] && echo \"$d\" && break; done", serial: serial, timeout: 8)) ?? ""
-        cocoonRoot = probe.split(separator: "\n").first.map(String.init)
+        cocoonRoot = await Self.findCocoonRoot(serial: serial)
+    }
+
+    /// Cocoon's data folder is picked by the user during setup, so it can be anywhere. It's the
+    /// folder that holds both `gamelists` and `downloaded_media` (usually named Cocoon_Data).
+    static func findCocoonRoot(serial: String) async -> String? {
+        let command = """
+        for d in /storage/*/Cocoon_Data /sdcard/Cocoon_Data; do [ -d "$d/gamelists" ] && { echo "$d"; exit 0; }; done; \
+        for top in /sdcard $(ls -d /storage/* 2>/dev/null | grep -vE 'emulated|self'); do \
+          find "$top" -maxdepth 4 -type d -name gamelists 2>/dev/null | while read g; do p=${g%/gamelists}; [ -d "$p/downloaded_media" ] && { echo "$p"; exit 0; }; done; \
+        done | head -1
+        """
+        let probe = (try? await ADB.shared.shell(command, serial: serial, timeout: 20)) ?? ""
+        return probe.split(separator: "\n").first.map { String($0).trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     func targetFolder(for system: String) -> String {
